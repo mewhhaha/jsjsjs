@@ -1,0 +1,5 @@
+node_modules/
+output/
+.js3/
+.threejs/
+.DS_Store

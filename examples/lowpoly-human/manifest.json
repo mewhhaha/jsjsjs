@@ -1,0 +1,35 @@
+{
+  "body": {
+    "source_triangles": 15500,
+    "triangles": 3720
+  },
+  "eyebrow001": {
+    "source_triangles": 192,
+    "triangles": 192
+  },
+  "eyelashes01": {
+    "source_triangles": 368,
+    "triangles": 368
+  },
+  "low-poly": {
+    "source_triangles": 172,
+    "triangles": 172
+  },
+  "male_casualsuit01": {
+    "source_triangles": 16672,
+    "triangles": 2334
+  },
+  "shoes01": {
+    "source_triangles": 3320,
+    "triangles": 664
+  },
+  "short04": {
+    "source_triangles": 1050,
+    "triangles": 1050
+  },
+  "teeth_base": {
+    "source_triangles": 7120,
+    "triangles": 356
+  },
+  "total_triangles": 8856
+}

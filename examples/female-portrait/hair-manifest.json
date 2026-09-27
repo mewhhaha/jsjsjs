@@ -1,0 +1,13 @@
+{
+  "source": "examples/female-flowing-hair/flowing.glb",
+  "sourceTriangles": 4108,
+  "triangles": 1799,
+  "vertices": 1842,
+  "bones": 31,
+  "anchorBone": "HairAnchor",
+  "boundaryAndSeamVerticesProtected": 2379,
+  "embeddedOriginalTexture": true,
+  "alphaMode": "MASK",
+  "doubleSided": true,
+  "meshAtSceneRoot": true
+}
