@@ -11,7 +11,7 @@ import {
   type GuideGroom,
   parseGroom,
   serializeGroom,
-} from "../src/groom-data.ts";
+} from "../src/hair/groom-data.ts";
 
 function source(): GuideGroom {
   return {

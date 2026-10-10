@@ -1,11 +1,11 @@
 import * as THREE from "three";
-import type { XYZ } from "./prelude.ts";
+import type { XYZ } from "./primitives.ts";
 import {
   checkedVector,
   degrees,
   resolveTarget,
   restTransform,
-} from "./rigging.ts";
+} from "./internal.ts";
 
 export type AnimationKey<T> = readonly [seconds: number, value: T];
 interface TrackBase {

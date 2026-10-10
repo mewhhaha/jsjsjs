@@ -4,11 +4,11 @@ import {
   assertEquals,
   assertThrows,
 } from "@std/assert";
+import type { Vector3Tuple } from "three";
 import {
   decodeImposterDirection,
   encodeImposterDirection,
   type ImposterCoverage,
-  type ImposterVector3,
   makeImposterLayout,
   resolveImposterOptions,
 } from "../web/imposter-layout.ts";
@@ -19,7 +19,7 @@ function close(actual: readonly number[], expected: readonly number[]) {
   );
 }
 
-function dot(a: ImposterVector3, b: ImposterVector3): number {
+function dot(a: Vector3Tuple, b: Vector3Tuple): number {
   return a.reduce((sum, value, index) => sum + value * b[index], 0);
 }
 
@@ -44,7 +44,7 @@ Deno.test("octahedral imposter mapping covers cardinal directions and roundtrips
       for (let angleIndex = 0; angleIndex < 31; angleIndex++) {
         const angle = angleIndex * 2 * Math.PI / 31;
         const radius = Math.sqrt(1 - y * y);
-        const direction: ImposterVector3 = [
+        const direction: Vector3Tuple = [
           radius * Math.cos(angle),
           y,
           radius * Math.sin(angle),

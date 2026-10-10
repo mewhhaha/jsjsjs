@@ -1,21 +1,11 @@
 /** Hollow vessels and curved shells. Y is up; origins are at the bottom center. */
 import * as THREE from "three";
-import { material, type MeshOptions, transform } from "./prelude.ts";
+import { material, type MeshOptions, transform } from "./primitives.ts";
+import { finite, integer, positive } from "./validate.ts";
 
 type Point = readonly [number, number];
-function pos(n: number, label: string, zero = false): number {
-  if (!Number.isFinite(n) || (zero ? n < 0 : n <= 0)) {
-    throw new RangeError(
-      `${label} must be ${zero ? "nonnegative" : "positive"} and finite`,
-    );
-  }
-  return n;
-}
 function count(n = 48): number {
-  if (!Number.isInteger(n) || n < 8) {
-    throw new RangeError("segments must be an integer >= 8");
-  }
-  return n;
+  return integer(n, 8, Infinity, "segments");
 }
 function mesh(geometry: THREE.BufferGeometry, o: MeshOptions): THREE.Mesh {
   return transform(new THREE.Mesh(geometry, o.material ?? material()), o);
@@ -56,24 +46,23 @@ export function basin(o: BasinOptions = {}): THREE.Mesh {
   if (shape !== "round" && shape !== "rectangular") {
     throw new RangeError("unknown basin shape");
   }
-  const h = pos(o.height ?? .5, "height");
-  const w = pos(o.wallThickness ?? .05, "wallThickness");
-  const b = pos(o.bottomThickness ?? .05, "bottomThickness");
-  const t = o.taper ?? 0;
-  if (!Number.isFinite(t)) throw new RangeError("taper must be finite");
-  const rw = pos(o.rimWidth ?? 0, "rimWidth", true);
-  const rh = pos(o.rimHeight ?? 0, "rimHeight", true);
+  const h = positive(o.height ?? .5, "height");
+  const w = positive(o.wallThickness ?? .05, "wallThickness");
+  const b = positive(o.bottomThickness ?? .05, "bottomThickness");
+  const t = finite(o.taper ?? 0, "taper");
+  const rw = positive(o.rimWidth ?? 0, "rimWidth", true);
+  const rh = positive(o.rimHeight ?? 0, "rimHeight", true);
   if ((rw === 0) !== (rh === 0)) {
     throw new RangeError(
       "rimWidth and rimHeight must both be positive or both zero",
     );
   }
-  const drain = pos(o.drainRadius ?? 0, "drainRadius", true);
+  const drain = positive(o.drainRadius ?? 0, "drainRadius", true);
   const n = count(o.segments);
   const rx = shape === "round"
-    ? pos(o.radius ?? .5, "radius")
-    : pos(o.width ?? 1, "width") / 2;
-  const rz = shape === "round" ? rx : pos(o.depth ?? 1, "depth") / 2;
+    ? positive(o.radius ?? .5, "radius")
+    : positive(o.width ?? 1, "width") / 2;
+  const rz = shape === "round" ? rx : positive(o.depth ?? 1, "depth") / 2;
   const min = Math.min(rx, rz);
   if (b >= h || w >= min - Math.max(t, 0)) {
     throw new RangeError("wall or bottom thickness does not fit basin");
@@ -90,7 +79,11 @@ export function basin(o: BasinOptions = {}): THREE.Mesh {
     p.push([rx - floorInset, b], [drain, b], [drain, 0]);
     return revolved(p, o, n);
   }
-  const cr = pos(o.cornerRadius ?? Math.min(.1, min), "cornerRadius", true);
+  const cr = positive(
+    o.cornerRadius ?? Math.min(.1, min),
+    "cornerRadius",
+    true,
+  );
   if (cr > min) throw new RangeError("cornerRadius must fit the rectangle");
   type Ring = { inset: number; y: number; circle?: number };
   const rings: Ring[] = [{ inset: t, y: 0 }, { inset: 0, y: h }];
@@ -161,9 +154,10 @@ export interface BowlOptions extends MeshOptions {
 }
 /** Rounded bowl with a small flat foot and a curved hollow interior. */
 export function bowl(o: BowlOptions = {}): THREE.Mesh {
-  const r = pos(o.radius ?? .5, "radius"), h = pos(o.height ?? .35, "height");
-  const w = pos(o.wallThickness ?? .04, "wallThickness"),
-    b = pos(o.bottomThickness ?? w, "bottomThickness");
+  const r = positive(o.radius ?? .5, "radius"),
+    h = positive(o.height ?? .35, "height");
+  const w = positive(o.wallThickness ?? .04, "wallThickness"),
+    b = positive(o.bottomThickness ?? w, "bottomThickness");
   if (w >= r * .3 || b >= h) {
     throw new RangeError("bowl thickness does not fit");
   }
@@ -202,7 +196,8 @@ export interface CupOptions extends BasinOptions {
 }
 /** Cylindrical drinking cup; handle is a separately editable vertical torus. */
 export function cup(o: CupOptions = {}): THREE.Group {
-  const r = pos(o.radius ?? .35, "radius"), h = pos(o.height ?? .6, "height");
+  const r = positive(o.radius ?? .35, "radius"),
+    h = positive(o.height ?? .6, "height");
   const paint = o.material ?? material();
   const g = new THREE.Group();
   const {
@@ -223,8 +218,8 @@ export function cup(o: CupOptions = {}): THREE.Group {
   body.name = "body";
   g.add(body);
   if (o.handle !== false) {
-    const hr = pos(o.handleRadius ?? h * .28, "handleRadius"),
-      ht = pos(o.handleThickness ?? .035, "handleThickness");
+    const hr = positive(o.handleRadius ?? h * .28, "handleRadius"),
+      ht = positive(o.handleThickness ?? .035, "handleThickness");
     if (ht >= hr || 2 * (hr + ht) > h) {
       throw new RangeError("handle must fit cup height");
     }
@@ -261,7 +256,8 @@ export interface TankOptions extends BasinOptions {
 /** Large storage tank; closed by default, with a separately editable top lid. */
 export function tank(o: TankOptions = {}): THREE.Group {
   const paint = o.material ?? material();
-  const h = pos(o.height ?? 2, "height"), r = pos(o.radius ?? 1, "radius");
+  const h = positive(o.height ?? 2, "height"),
+    r = positive(o.radius ?? 1, "radius");
   const {
     name: _name,
     position: _position,
@@ -279,7 +275,7 @@ export function tank(o: TankOptions = {}): THREE.Group {
   const g = new THREE.Group();
   g.add(body);
   if (o.closed !== false) {
-    const thickness = pos(
+    const thickness = positive(
       o.lidThickness ?? o.wallThickness ?? .05,
       "lidThickness",
     );
@@ -356,10 +352,11 @@ function hollowProfile(
   );
 }
 function vesselDimensions(o: VaseOptions) {
-  const r = pos(o.radius ?? .5, "radius"), h = pos(o.height ?? 1, "height");
-  const neck = pos(o.neckRadius ?? r * .48, "neckRadius");
-  const w = pos(o.wallThickness ?? .035, "wallThickness"),
-    b = pos(o.bottomThickness ?? .05, "bottomThickness");
+  const r = positive(o.radius ?? .5, "radius"),
+    h = positive(o.height ?? 1, "height");
+  const neck = positive(o.neckRadius ?? r * .48, "neckRadius");
+  const w = positive(o.wallThickness ?? .035, "wallThickness"),
+    b = positive(o.bottomThickness ?? .05, "bottomThickness");
   if (neck > r) throw new RangeError("neckRadius must not exceed radius");
   return { r, h, neck, w, b };
 }
@@ -385,7 +382,7 @@ export function bottle(o: BottleOptions = {}): THREE.Mesh {
     neckRadius: .12,
     ...o,
   });
-  const nh = pos(o.neckHeight ?? h * .22, "neckHeight");
+  const nh = positive(o.neckHeight ?? h * .22, "neckHeight");
   if (nh >= h * .65) {
     throw new RangeError("neckHeight must be less than 65% of height");
   }
@@ -400,7 +397,7 @@ export function bottle(o: BottleOptions = {}): THREE.Mesh {
 /** Hollow urn with a narrow foot, rounded angular belly, and flared open mouth. */
 export function urn(o: UrnOptions = {}): THREE.Mesh {
   const { r, h, neck, w, b } = vesselDimensions({ height: 1.2, ...o });
-  const foot = pos(o.footRadius ?? r * .5, "footRadius");
+  const foot = positive(o.footRadius ?? r * .5, "footRadius");
   if (foot > r) throw new RangeError("footRadius must not exceed radius");
   return hollowProfile(
     [
@@ -428,10 +425,11 @@ export interface PedestalOptions extends MeshOptions {
 }
 /** Turned solid stand with a broad plinth, narrow shaft, and broad display cap. */
 export function pedestal(o: PedestalOptions = {}): THREE.Mesh {
-  const r = pos(o.radius ?? .5, "radius"), h = pos(o.height ?? 1, "height");
-  const shaft = pos(o.shaftRadius ?? r * .45, "shaftRadius");
-  const base = pos(o.baseHeight ?? h * .12, "baseHeight"),
-    cap = pos(o.capHeight ?? h * .1, "capHeight");
+  const r = positive(o.radius ?? .5, "radius"),
+    h = positive(o.height ?? 1, "height");
+  const shaft = positive(o.shaftRadius ?? r * .45, "shaftRadius");
+  const base = positive(o.baseHeight ?? h * .12, "baseHeight"),
+    cap = positive(o.capHeight ?? h * .1, "capHeight");
   if (shaft > r || 1.5 * (base + cap) >= h) {
     throw new RangeError("pedestal dimensions do not fit");
   }
@@ -459,9 +457,10 @@ export interface KnobOptions extends MeshOptions {
 }
 /** Solid turned knob with a mounting stem and rounded mushroom grip. */
 export function knob(o: KnobOptions = {}): THREE.Mesh {
-  const r = pos(o.radius ?? .2, "radius"), h = pos(o.height ?? .3, "height");
-  const stem = pos(o.stemRadius ?? r * .4, "stemRadius"),
-    sh = pos(o.stemHeight ?? h * .35, "stemHeight");
+  const r = positive(o.radius ?? .2, "radius"),
+    h = positive(o.height ?? .3, "height");
+  const stem = positive(o.stemRadius ?? r * .4, "stemRadius"),
+    sh = positive(o.stemHeight ?? h * .35, "stemHeight");
   if (stem >= r || sh >= h) throw new RangeError("knob stem must fit grip");
   const p: Point[] = [[0, 0], [stem, 0], [stem, sh], [r * .8, sh]];
   for (let i = 0; i <= 16; i++) {
@@ -480,9 +479,9 @@ export interface DomeOptions extends MeshOptions {
 export interface HemisphereOptions extends Omit<DomeOptions, "height"> {}
 /** Ellipsoidal cap. Shell thickness uses concentric radius/height offsets. */
 export function dome(o: DomeOptions = {}): THREE.Mesh {
-  const r = pos(o.radius ?? .5, "radius"),
-    h = pos(o.height ?? r * .6, "height");
-  const t = pos(o.thickness ?? 0, "thickness", true);
+  const r = positive(o.radius ?? .5, "radius"),
+    h = positive(o.height ?? r * .6, "height");
+  const t = positive(o.thickness ?? 0, "thickness", true);
   if (t >= Math.min(r, h)) throw new RangeError("thickness must fit dome");
   const p: Point[] = [];
   for (let i = 0; i <= 32; i++) {
@@ -509,9 +508,9 @@ export interface ConeOptions extends MeshOptions {
 }
 /** Pointed cone. A positive thickness leaves its underside open and a solid tip. */
 export function cone(o: ConeOptions = {}): THREE.Mesh {
-  const r = pos(o.radius ?? .5, "radius"),
-    h = pos(o.height ?? 1, "height"),
-    t = pos(o.thickness ?? 0, "thickness", true);
+  const r = positive(o.radius ?? .5, "radius"),
+    h = positive(o.height ?? 1, "height"),
+    t = positive(o.thickness ?? 0, "thickness", true);
   if (t >= r) throw new RangeError("thickness must be less than radius");
   return revolved(
     t
@@ -531,10 +530,11 @@ export interface FunnelOptions extends MeshOptions {
 }
 /** Open-mouth conical funnel with an open straight throat; radii measure outer surfaces. */
 export function funnel(o: FunnelOptions = {}): THREE.Mesh {
-  const r = pos(o.radius ?? .5, "radius"), h = pos(o.height ?? .7, "height");
-  const neck = pos(o.neckRadius ?? .1, "neckRadius"),
-    nh = pos(o.neckHeight ?? h * .3, "neckHeight");
-  const t = pos(o.wallThickness ?? .025, "wallThickness");
+  const r = positive(o.radius ?? .5, "radius"),
+    h = positive(o.height ?? .7, "height");
+  const neck = positive(o.neckRadius ?? .1, "neckRadius"),
+    nh = positive(o.neckHeight ?? h * .3, "neckHeight");
+  const t = positive(o.wallThickness ?? .025, "wallThickness");
   if (neck >= r || nh >= h || t >= neck) {
     throw new RangeError("funnel neck and wall must fit");
   }
@@ -553,10 +553,10 @@ export interface CanopyOptions extends MeshOptions {
 }
 /** Barrel-vault canopy: an arched shell spanning X, extruded along Z, open underneath. */
 export function canopy(o: CanopyOptions = {}): THREE.Mesh {
-  const w = pos(o.width ?? 2, "width"),
-    d = pos(o.depth ?? 1.5, "depth"),
-    rise = pos(o.rise ?? .5, "rise");
-  const t = pos(o.thickness ?? .05, "thickness");
+  const w = positive(o.width ?? 2, "width"),
+    d = positive(o.depth ?? 1.5, "depth"),
+    rise = positive(o.rise ?? .5, "rise");
+  const t = positive(o.thickness ?? .05, "thickness");
   if (t >= Math.min(rise, w / 2)) {
     throw new RangeError("thickness must fit canopy");
   }

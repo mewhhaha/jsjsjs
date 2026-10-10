@@ -2,13 +2,14 @@
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as THREE from "three";
+import { blenderCommand } from "../src/blender.ts";
 import {
   generateGroomStrands,
   type GroomFiber,
   type GuideGroom,
   parseGroom,
   serializeGroom,
-} from "../src/groom-data.ts";
+} from "../src/hair/groom-data.ts";
 
 export interface ReferenceAttachment {
   name: string;
@@ -213,9 +214,9 @@ export async function main(args = Deno.args): Promise<void> {
       `Render every generated source fiber with native Cycles Hair Curves.
 
 deno run -A scripts/export-groom-reference.ts \\
-  --source output/hair-bun/grooms/001-wig-messy-bun/groom.json \\
-  --head examples/haircuts/assets/head.glb \\
-  --output output/hair-bun/cycles-reference \\
+  --source output/model/grooms/001-hair/groom.json \\
+  --head output/head.glb \\
+  --output output/model/cycles-reference \\
   --preset studio --view three-quarter --resolution 800x1000 --samples 32
 
 Required: --source <groom.json> --output <directory>
@@ -264,14 +265,6 @@ JS3_BLENDER can select the Blender executable. No window is opened.`,
       `(${metadata.counts.points} points, ${metadata.counts.instances} instance(s)).`,
   );
   const renderArgs = [
-    "--background",
-    "--factory-startup",
-    "--disable-autoexec",
-    "--python-exit-code",
-    "1",
-    "--python",
-    fileURLToPath(new URL("./render-groom-reference.py", import.meta.url)),
-    "--",
     "--source",
     join(packed, "reference.json"),
     "--output",
@@ -296,15 +289,11 @@ JS3_BLENDER can select the Blender executable. No window is opened.`,
       renderArgs.push(`--${key}`, key === "head" ? resolve(value) : value);
     }
   }
-  const executable = Deno.env.get("JS3_BLENDER") ||
-    Deno.env.get("THREEJS_BLENDER") || "blender";
-  const child = new Deno.Command(executable, {
-    args: renderArgs,
-    env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
-    stdin: "null",
-    stdout: "inherit",
-    stderr: "inherit",
-  }).spawn();
+  const child = blenderCommand(
+    fileURLToPath(new URL("./render-groom-reference.py", import.meta.url)),
+    renderArgs,
+    { stdin: "null", stdout: "inherit", stderr: "inherit" },
+  ).spawn();
   let exited = false;
   const stop = () => {
     if (!exited) {

@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import * as THREE from "three";
-import { buildFurGroom } from "../examples/groom-fur.ts";
+import { buildFurGroom } from "./fixtures/groom-fur.ts";
 import {
   buildGroom,
   buildGroomLODs,

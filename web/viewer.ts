@@ -6,22 +6,19 @@ import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
 import { OBJExporter } from "three/addons/exporters/OBJExporter.js";
 import type { BuildState } from "../src/server.ts";
 import type {
-  GLBExportTransfer,
-  GroomExportTransfer,
-  GroomFileExportTransfer,
+  GroomExportGroup,
   ModelInspection,
   ModelView,
   ViewerAPI,
 } from "./api.ts";
 import { captureImposter } from "./imposter.ts";
-import { matchGroomShadowCoverage } from "../src/hair-shading.ts";
-import { GroomVolumeShadows } from "../src/groom-volume-shadows.ts";
+import { matchGroomShadowCoverage } from "../src/hair/hair-shading.ts";
+import { GroomVolumeShadows } from "../src/hair/groom-volume-shadows.ts";
 import {
-  type CollectedGroomAssets,
   collectGroomAssets,
   encodeGroomAssetFile,
   GROOM_ASSET_FILES,
-} from "../src/groom-assets.ts";
+} from "../src/hair/groom-assets.ts";
 
 const canvas = document.querySelector("canvas")!;
 
@@ -402,8 +399,6 @@ function exportOBJ() {
   return new OBJExporter().parse(model);
 }
 const glbChunkSize = 3 * 1024 * 1024;
-let activeGLB: { id: string; bytes: Uint8Array } | undefined;
-let preparingGLB = false;
 
 async function createGLB(): Promise<Uint8Array> {
   const release = animation.freeze(true);
@@ -475,7 +470,7 @@ async function exportGLB() {
   // V8 cannot represent the >512 MiB base64 string produced by a large GLB.
   if (bytes.byteLength > 384 * 1024 * 1024 - 64) {
     throw new Error(
-      "GLB is too large for one base64 string; use the CLI or beginGLBExport/readGLBExportChunk.",
+      "GLB is too large for one base64 string; use js3 export or uploadGLB.",
     );
   }
   const chunks: string[] = [];
@@ -485,169 +480,58 @@ async function exportGLB() {
   return chunks.join("");
 }
 
-async function beginGLBExport(): Promise<GLBExportTransfer> {
-  if (activeGLB || preparingGLB) {
+/** POST one file to a CLI receiver; its response reports any rejection. */
+async function upload(url: string, path: string, bytes: Uint8Array) {
+  const target = new URL(url, location.href);
+  target.searchParams.set("path", path);
+  const response = await fetch(target, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: bytes as Uint8Array<ArrayBuffer>,
+  });
+  const message = await response.text();
+  if (!response.ok) {
     throw new Error(
-      "A GLB export is already active; end it before starting another.",
+      `Upload of ${path} failed (${response.status}): ${message}`,
     );
   }
-  preparingGLB = true;
-  try {
-    const bytes = await createGLB();
-    const id = crypto.randomUUID();
-    activeGLB = { id, bytes };
-    return {
-      id,
-      byteLength: bytes.byteLength,
-      chunkSize: glbChunkSize,
-      chunks: Math.ceil(bytes.byteLength / glbChunkSize),
-    };
-  } finally {
-    preparingGLB = false;
-  }
 }
 
-function readGLBExportChunk(id: string, index: number): string {
-  if (!activeGLB || activeGLB.id !== id) {
-    throw new Error("Unknown or expired GLB export.");
-  }
-  if (
-    !Number.isInteger(index) || index < 0 ||
-    index >= Math.ceil(activeGLB.bytes.byteLength / glbChunkSize)
-  ) throw new RangeError("GLB export chunk index is out of range.");
-  return encodeGLBChunk(
-    activeGLB.bytes.subarray(index * glbChunkSize, (index + 1) * glbChunkSize),
-  );
+async function uploadGLB(url: string) {
+  await upload(url, "model.glb", await createGLB());
 }
 
-function endGLBExport(id: string) {
-  if (activeGLB?.id === id) activeGLB = undefined;
-}
-
-let activeGroom: {
-  id: string;
-  model: THREE.Object3D;
-  sequence: number;
-  assets: CollectedGroomAssets[];
-  preparing: boolean;
-  file?: { index: number; bytes: Uint8Array };
-} | undefined;
-
-function beginGroomExport(): GroomExportTransfer {
-  if (activeGroom) {
-    throw new Error("A groom export is already active; end it first.");
-  }
+async function uploadGrooms(url: string): Promise<GroomExportGroup[]> {
   if (!model || !api.ready || api.error) {
     throw new Error("No model is ready to export.");
   }
+  const snapshot = model;
+  const sequence = eventSequence;
   const assets = collectGroomAssets(model);
-  const id = crypto.randomUUID();
-  activeGroom = {
-    id,
-    model,
-    sequence: eventSequence,
-    assets,
-    preparing: false,
-  };
-  return {
-    id,
-    grooms: assets.map((asset) => ({
-      name: asset.name,
-      directory: asset.directory,
-      files: {
-        source: `${asset.directory}/groom.json`,
-        manifest: `${asset.directory}/manifest.json`,
-        coverage: `${asset.directory}/coverage.png`,
-        normal: `${asset.directory}/normal.png`,
-        tangent: `${asset.directory}/tangent.png`,
-        depth: `${asset.directory}/depth.png`,
-        attributes: `${asset.directory}/attributes.png`,
-      },
-    })),
-    files: assets.flatMap((asset) =>
-      GROOM_ASSET_FILES.map((filename) => ({
-        path: `${asset.directory}/${filename}`,
-        kind: filename.endsWith(".png") ? "png" as const : "json" as const,
-      }))
-    ),
-  };
-}
-
-function groomTransfer(id: string) {
-  if (!activeGroom || activeGroom.id !== id) {
-    throw new Error("Unknown or expired groom export.");
+  for (const asset of assets) {
+    for (const filename of GROOM_ASSET_FILES) {
+      const bytes = await encodeGroomAssetFile(asset, filename);
+      if (snapshot !== model || sequence !== eventSequence || !api.ready) {
+        throw new Error(
+          "Model changed during groom export; retry after the rebuild completes.",
+        );
+      }
+      await upload(url, `${asset.directory}/${filename}`, bytes);
+    }
   }
-  if (
-    activeGroom.model !== model || activeGroom.sequence !== eventSequence ||
-    !api.ready
-  ) {
-    throw new Error(
-      "Model changed during groom export; retry after the rebuild completes.",
-    );
-  }
-  return activeGroom;
-}
-
-async function prepareGroomExportFile(
-  id: string,
-  fileIndex: number,
-): Promise<GroomFileExportTransfer> {
-  const transfer = groomTransfer(id);
-  if (
-    !Number.isInteger(fileIndex) || fileIndex < 0 ||
-    fileIndex >= transfer.assets.length * GROOM_ASSET_FILES.length
-  ) throw new RangeError("Groom export file index is out of range.");
-  if (transfer.preparing) {
-    throw new Error("A groom file is already being prepared.");
-  }
-  transfer.preparing = true;
-  transfer.file = undefined;
-  try {
-    const bytes = await encodeGroomAssetFile(
-      transfer.assets[Math.floor(fileIndex / GROOM_ASSET_FILES.length)],
-      GROOM_ASSET_FILES[fileIndex % GROOM_ASSET_FILES.length],
-    );
-    groomTransfer(id);
-    transfer.file = { index: fileIndex, bytes };
-    return {
-      id,
-      fileIndex,
-      byteLength: bytes.byteLength,
-      chunkSize: glbChunkSize,
-      chunks: Math.ceil(bytes.byteLength / glbChunkSize),
-    };
-  } finally {
-    transfer.preparing = false;
-  }
-}
-
-function readGroomExportChunk(
-  id: string,
-  fileIndex: number,
-  index: number,
-): string {
-  const transfer = groomTransfer(id);
-  if (
-    !transfer.file || transfer.file.index !== fileIndex || transfer.preparing
-  ) {
-    throw new Error("Prepare this groom file before reading its chunks.");
-  }
-  if (
-    !Number.isInteger(index) || index < 0 ||
-    index >= Math.ceil(transfer.file.bytes.length / glbChunkSize)
-  ) {
-    throw new RangeError("Groom export chunk index is out of range.");
-  }
-  return encodeGLBChunk(
-    transfer.file.bytes.subarray(
-      index * glbChunkSize,
-      (index + 1) * glbChunkSize,
-    ),
-  );
-}
-
-function endGroomExport(id: string) {
-  if (activeGroom?.id === id) activeGroom = undefined;
+  return assets.map((asset) => ({
+    name: asset.name,
+    directory: asset.directory,
+    files: {
+      source: `${asset.directory}/groom.json`,
+      manifest: `${asset.directory}/manifest.json`,
+      coverage: `${asset.directory}/coverage.png`,
+      normal: `${asset.directory}/normal.png`,
+      tangent: `${asset.directory}/tangent.png`,
+      depth: `${asset.directory}/depth.png`,
+      attributes: `${asset.directory}/attributes.png`,
+    },
+  }));
 }
 
 const api: ViewerAPI = {
@@ -656,13 +540,8 @@ const api: ViewerAPI = {
   error: null,
   exportOBJ,
   exportGLB,
-  beginGLBExport,
-  readGLBExportChunk,
-  endGLBExport,
-  beginGroomExport,
-  prepareGroomExportFile,
-  readGroomExportChunk,
-  endGroomExport,
+  uploadGLB,
+  uploadGrooms,
   inspect,
   setView,
   fit,

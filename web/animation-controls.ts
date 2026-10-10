@@ -110,7 +110,8 @@ export class AnimationControls {
 
   private tick = (now: number) => {
     this.frame = 0;
-    this.player?.update((now - this.previous) / 1000);
+    // A frame timestamp can precede the performance.now() taken in play().
+    this.player?.update(Math.max(0, now - this.previous) / 1000);
     this.previous = now;
     this.refresh();
     this.render();

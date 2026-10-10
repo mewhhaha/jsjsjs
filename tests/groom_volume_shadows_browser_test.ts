@@ -1,8 +1,6 @@
 import { assert, assertAlmostEquals, assertEquals } from "@std/assert";
-import * as esbuild from "esbuild";
 import { fileURLToPath } from "node:url";
-import { startServer } from "../src/server.ts";
-import { launchViewer, waitForModel } from "../src/browser.ts";
+import { chromiumAvailable, withViewer } from "./support.ts";
 
 interface State {
   mode?: "low" | "high" | "stack" | "duplicate" | "lod";
@@ -68,7 +66,7 @@ function fixtureSource() {
   ]
     .map((name) =>
       JSON.stringify(
-        fileURLToPath(new URL(`../src/${name}.ts`, import.meta.url)),
+        fileURLToPath(new URL(`../src/hair/${name}.ts`, import.meta.url)),
       )
     );
   return `
@@ -235,334 +233,320 @@ export default () => {
 Deno.test({
   name:
     "groom volume preview attenuates full source paths, retains opaque blockers and survives camera/LOD/export changes",
+  ignore: !chromiumAvailable,
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
-    const directory = await Deno.makeTempDir({
-      prefix: "js3-volume-shadow-",
-    });
-    let server: Awaited<ReturnType<typeof startServer>> | undefined;
-    let viewer: Awaited<ReturnType<typeof launchViewer>> | undefined;
-    const errors: string[] = [];
-    try {
-      const file = `${directory}/model.ts`;
-      await Deno.writeTextFile(file, fixtureSource());
-      server = await startServer(file, 0);
-      viewer = await launchViewer(server.url, {
-        renderer: "software",
-        width: 192,
-        height: 192,
-      });
-      viewer.page.on("console", (message) => {
-        if (message.type() === "error") errors.push(message.text());
-      });
-      await waitForModel(viewer.page);
-      const capture = (state: State) =>
-        viewer!.page.evaluate(
-          (settings) =>
-            (window as unknown as { volumeFixture: Fixture }).volumeFixture
-              .render(settings),
-          state,
-        );
-      const ordinary = await capture({ mode: "low", enabled: false });
-      const sparse = await capture({ enabled: true });
-      const dense = await capture({ mode: "high" });
-      const stacked = await capture({ mode: "stack" });
-      assert(
-        sparse.center > ordinary.center + 12,
-        `VSM must stop writing opaque groom sheets: ordinary=${ordinary.center}, volume=${sparse.center}`,
-      );
-      assert(
-        sparse.center < sparse.clear - 2,
-        `Sparse groom must still attenuate light: ${JSON.stringify(sparse)}`,
-      );
-      assert(
-        dense.center < sparse.center - 8,
-        `Higher fiber density must darken the receiver: ${
-          JSON.stringify({ sparse, dense })
-        }`,
-      );
-      assert(
-        stacked.center < dense.center - 5,
-        `A second hair path must increase extinction: ${
-          JSON.stringify({ dense, stacked })
-        }`,
-      );
-      assert(
-        dense.edge > dense.center + 10,
-        "Sparse boundary must transmit more light than the dense core",
-      );
-      assertEquals(sparse.groomCast, false);
-      assertEquals(sparse.groomReceive, true);
-      assertEquals(sparse.hasRuntimeDepth, true);
-      assertEquals(sparse.hairShaderPreserved, true);
-      const duplicate = await capture({ mode: "duplicate" });
-      assertEquals(duplicate.instances, 1);
-      assertAlmostEquals(duplicate.center, dense.center, 1);
-      const lod = await capture({ mode: "lod" });
-      assertEquals(lod.instances, 1);
-      assertEquals(lod.volumes, 1);
-      assertAlmostEquals(lod.center, dense.center, 1);
-      const repeat = await capture({});
-      assertEquals(repeat.builds, lod.builds);
-      const farLod = await capture({ camera: [0, 0, 12] });
-      assertEquals(farLod.builds, lod.builds);
-      assertAlmostEquals(farLod.center, dense.center, 1);
-      const camera = await capture({ camera: [.6, .2, 5] });
-      assertEquals(camera.builds, lod.builds);
-      assertAlmostEquals(camera.center, dense.center, 8);
-      // An imposter renderer can change camera without a controller update.
-      const alternate = await capture({
-        camera: [-.4, .1, 5],
-        skipUpdate: true,
-      });
-      assertAlmostEquals(alternate.center, dense.center, 8);
-      const moved = await capture({ camera: [0, 0, 5], offset: 1.1 });
-      assert(
-        moved.center > dense.center + 20,
-        "Nested transform must move the extinction footprint",
-      );
-      assert(moved.builds > camera.builds);
-      const reversed = await capture({
-        mode: "high",
-        offset: 0,
-        light: [0, 0, -3],
-      });
-      const side = await capture({ light: [3, 0, 3] });
-      assert(side.builds > reversed.builds);
-      assert(
-        side.clear < side.center - 15,
-        `Changing light direction must move the shadow across the receiver: ${
-          JSON.stringify(side)
-        }`,
-      );
-      const unblocked = await capture({ light: [0, 0, 3], blocker: false });
-      const blocked = await capture({ blocker: true });
-      assert(
-        blocked.blocked < unblocked.blocked - 25,
-        "Opaque head/objects must retain ordinary shadows",
-      );
-      const hidden = await capture({ hidden: true, blocker: false });
-      assertEquals(hidden.instances, 0);
-      assertEquals(hidden.textureBytes, 0);
-      assert(hidden.center > dense.center + 20);
-      const ambientClear = await capture({
-        hidden: false,
-        mode: "high",
-        illumination: "hemisphere",
-        receiverZ: .44,
-        directional: false,
-        ambientOcclusion: 0,
-      });
-      const ambientSparse = await capture({
-        mode: "low",
-        ambientOcclusion: 1,
-      });
-      const ambientDense = await capture({ mode: "high" });
-      assert(
-        ambientSparse.center < ambientClear.center - 3,
-        `Hemisphere-only light must see sparse groom occlusion: ${
-          JSON.stringify({ ambientClear, ambientSparse })
-        }`,
-      );
-      assert(
-        ambientDense.center < ambientSparse.center - 12,
-        `Dense source fibers must occlude more ambient light: ${
-          JSON.stringify({ ambientSparse, ambientDense })
-        }`,
-      );
-      assertAlmostEquals(ambientDense.clear, ambientClear.clear, 1);
-      assert(
-        ambientDense.edge > ambientDense.center + 15,
-        "Ambient occlusion must preserve a sparse boundary",
-      );
-      assertEquals(ambientDense.lights, 0);
-      assertEquals(ambientDense.instances, 1);
-      assertEquals(ambientDense.ambientResolution, 32);
-      assertEquals(ambientDense.ambientDistance, .18);
-      assertEquals(ambientDense.textureBytes, 2 * 32 ** 3 * 4);
-      assertEquals(ambientDense.groomCast, true);
-      assertEquals(ambientDense.groomReceive, true);
-      assertEquals(ambientDense.hasRuntimeDepth, false);
-      const halfAmbient = await capture({ ambientOcclusion: .5 });
-      assertAlmostEquals(
-        halfAmbient.center,
-        (ambientClear.center + ambientDense.center) / 2,
-        2,
-      );
-      assertEquals(halfAmbient.ambientBuilds, ambientDense.ambientBuilds);
-      const normalAway = await capture({
-        ambientOcclusion: 1,
-        camera: [0, 0, -5],
-      });
-      assert(
-        normalAway.center > ambientDense.center + 20,
-        "Ambient visibility must follow the receiver normal, not darken every surface by a scalar",
-      );
-      assertAlmostEquals(normalAway.center, ambientClear.center, 2);
-      assertEquals(normalAway.ambientBuilds, ambientDense.ambientBuilds);
-      const ambientLod = await capture({
-        mode: "lod",
-        camera: [0, 0, 12],
-      });
-      assertEquals(ambientLod.ambientBuilds, ambientDense.ambientBuilds);
-      assertEquals(ambientLod.instances, 1);
-      assertAlmostEquals(ambientLod.center, ambientDense.center, 1);
-      const ambientDuplicate = await capture({ mode: "duplicate" });
-      assertEquals(ambientDuplicate.ambientBuilds, ambientDense.ambientBuilds);
-      assertEquals(ambientDuplicate.instances, 1);
-      assertAlmostEquals(ambientDuplicate.center, ambientDense.center, 1);
-      const ambientCamera = await capture({
-        mode: "high",
-        camera: [.6, .2, 5],
-      });
-      assertEquals(ambientCamera.ambientBuilds, ambientDense.ambientBuilds);
-      assertAlmostEquals(ambientCamera.center, ambientDense.center, 8);
-      const ambientAlternate = await capture({
-        camera: [-.4, .1, 5],
-        skipUpdate: true,
-      });
-      assertAlmostEquals(ambientAlternate.center, ambientDense.center, 8);
-      const ambientDistant = await capture({
-        camera: [0, 0, 5],
-        receiverZ: 0,
-      });
-      assertEquals(ambientDistant.ambientBuilds, ambientDense.ambientBuilds);
-      assertAlmostEquals(
-        ambientDistant.center,
-        ambientClear.center,
-        1,
-        "Local ambient influence must end before distant exposed skin",
-      );
-      const ambientMoved = await capture({ receiverZ: .44, offset: 1.1 });
-      assert(ambientMoved.ambientBuilds > ambientDense.ambientBuilds);
-      assertAlmostEquals(ambientMoved.center, ambientClear.center, 1);
-      const directOnly = await capture({
-        mode: "low",
-        offset: 0,
-        illumination: "directional",
-        directional: true,
-        ambientOcclusion: 0,
-      });
-      const combined = await capture({ ambientOcclusion: 1 });
-      assertEquals(combined.builds, directOnly.builds);
-      assertAlmostEquals(
-        combined.center,
-        directOnly.center,
-        1,
-        "Ambient occlusion must leave direct illumination unchanged",
-      );
-      assertEquals(combined.groomCast, false);
-      const ambientLightChanged = await capture({ light: [3, 0, 3] });
-      assert(ambientLightChanged.builds > combined.builds);
-      assertEquals(ambientLightChanged.ambientBuilds, combined.ambientBuilds);
-      const ambientOnly = await capture({
-        directional: false,
-        light: [0, 0, 3],
-      });
-      assertEquals(ambientOnly.groomCast, true);
-      assertEquals(ambientOnly.hasRuntimeDepth, false);
-      assertEquals(ambientOnly.ambientBuilds, combined.ambientBuilds);
-      const environmentClear = await capture({
-        mode: "high",
-        illumination: "environment",
-        metalness: 1,
-        ambientOcclusion: 0,
-      });
-      const environmentOccluded = await capture({ ambientOcclusion: 1 });
-      assert(
-        environmentOccluded.center < environmentClear.center - 10,
-        `Ambient volume must occlude rough environment reflections: ${
-          JSON.stringify({ environmentClear, environmentOccluded })
-        }`,
-      );
-      assertAlmostEquals(environmentOccluded.clear, environmentClear.clear, 1);
-      const document = JSON.parse(
-        await viewer.page.evaluate(() =>
-          (window as unknown as { volumeFixture: Fixture }).volumeFixture
-            .exportDocument()
-        ),
-      );
-      const serialized = JSON.stringify(document);
-      for (
-        const term of [
-          "worldToTexture",
-          "groomVolumeMap",
-          "groomVolumeAmbient",
-          "positiveData",
-          "negativeData",
-          "voxelSize",
-          "moments",
-          "storedMass",
-        ]
-      ) {
+    await withViewer(fixtureSource(), async ({ page, errors }) => {
+      try {
+        const capture = (state: State) =>
+          page.evaluate(
+            (settings) =>
+              (window as unknown as { volumeFixture: Fixture }).volumeFixture
+                .render(settings),
+            state,
+          );
+        const ordinary = await capture({ mode: "low", enabled: false });
+        const sparse = await capture({ enabled: true });
+        const dense = await capture({ mode: "high" });
+        const stacked = await capture({ mode: "stack" });
         assert(
-          !serialized.includes(term),
-          `Runtime volume leaked into portable glTF: ${term}`,
+          sparse.center > ordinary.center + 12,
+          `VSM must stop writing opaque groom sheets: ordinary=${ordinary.center}, volume=${sparse.center}`,
         );
-      }
-      assertEquals(
-        document.images.length,
-        1,
-        "Only the authored alpha atlas should be exported",
-      );
-      const roundTrip = await viewer.page.evaluate(() =>
-        (window as unknown as { volumeFixture: Fixture }).volumeFixture
-          .roundTrip()
-      );
-      assert(
-        roundTrip.markers > 0,
-        "glTF should retain the small groom marker",
-      );
-      assert(roundTrip.meshes > 0, "The actual GLB must reload its geometry");
-      assertEquals(
-        roundTrip.instances,
-        0,
-        "Portable GLB has no runtime volume",
-      );
-      assertEquals(roundTrip.ordinaryShadows, true);
-      assertEquals(roundTrip.portableMaterials, true);
-      assertEquals(roundTrip.mixedRejected, true);
-      const restored = await viewer.page.evaluate(() =>
-        (window as unknown as { volumeFixture: Fixture }).volumeFixture
-          .cleanup()
-      );
-      assertEquals(restored, {
-        callback: true,
-        key: true,
-        depth: true,
-        cast: true,
-        receive: true,
-      });
-      const probe = await viewer.page.evaluate(() =>
-        (window as unknown as { volumeFixture: Fixture }).volumeFixture
-          .callbackProbe()
-      );
-      assert(probe.keysDistinct);
-      assert(
-        probe.left[0] > probe.left[2] * 3,
-        `First prior shader callback was lost: ${probe.left}`,
-      );
-      assert(
-        probe.right[2] > probe.right[0] * 3,
-        `Second prior shader callback reused another program: ${probe.right}`,
-      );
-      assertEquals(
-        errors,
-        [],
-        "Volume shaders must compile without WebGL errors",
-      );
-    } finally {
-      if (viewer) {
-        await viewer.page.evaluate(() =>
+        assert(
+          sparse.center < sparse.clear - 2,
+          `Sparse groom must still attenuate light: ${JSON.stringify(sparse)}`,
+        );
+        assert(
+          dense.center < sparse.center - 8,
+          `Higher fiber density must darken the receiver: ${
+            JSON.stringify({ sparse, dense })
+          }`,
+        );
+        assert(
+          stacked.center < dense.center - 5,
+          `A second hair path must increase extinction: ${
+            JSON.stringify({ dense, stacked })
+          }`,
+        );
+        assert(
+          dense.edge > dense.center + 10,
+          "Sparse boundary must transmit more light than the dense core",
+        );
+        assertEquals(sparse.groomCast, false);
+        assertEquals(sparse.groomReceive, true);
+        assertEquals(sparse.hasRuntimeDepth, true);
+        assertEquals(sparse.hairShaderPreserved, true);
+        const duplicate = await capture({ mode: "duplicate" });
+        assertEquals(duplicate.instances, 1);
+        assertAlmostEquals(duplicate.center, dense.center, 1);
+        const lod = await capture({ mode: "lod" });
+        assertEquals(lod.instances, 1);
+        assertEquals(lod.volumes, 1);
+        assertAlmostEquals(lod.center, dense.center, 1);
+        const repeat = await capture({});
+        assertEquals(repeat.builds, lod.builds);
+        const farLod = await capture({ camera: [0, 0, 12] });
+        assertEquals(farLod.builds, lod.builds);
+        assertAlmostEquals(farLod.center, dense.center, 1);
+        const camera = await capture({ camera: [.6, .2, 5] });
+        assertEquals(camera.builds, lod.builds);
+        assertAlmostEquals(camera.center, dense.center, 8);
+        // An imposter renderer can change camera without a controller update.
+        const alternate = await capture({
+          camera: [-.4, .1, 5],
+          skipUpdate: true,
+        });
+        assertAlmostEquals(alternate.center, dense.center, 8);
+        const moved = await capture({ camera: [0, 0, 5], offset: 1.1 });
+        assert(
+          moved.center > dense.center + 20,
+          "Nested transform must move the extinction footprint",
+        );
+        assert(moved.builds > camera.builds);
+        const reversed = await capture({
+          mode: "high",
+          offset: 0,
+          light: [0, 0, -3],
+        });
+        const side = await capture({ light: [3, 0, 3] });
+        assert(side.builds > reversed.builds);
+        assert(
+          side.clear < side.center - 15,
+          `Changing light direction must move the shadow across the receiver: ${
+            JSON.stringify(side)
+          }`,
+        );
+        const unblocked = await capture({ light: [0, 0, 3], blocker: false });
+        const blocked = await capture({ blocker: true });
+        assert(
+          blocked.blocked < unblocked.blocked - 25,
+          "Opaque head/objects must retain ordinary shadows",
+        );
+        const hidden = await capture({ hidden: true, blocker: false });
+        assertEquals(hidden.instances, 0);
+        assertEquals(hidden.textureBytes, 0);
+        assert(hidden.center > dense.center + 20);
+        const ambientClear = await capture({
+          hidden: false,
+          mode: "high",
+          illumination: "hemisphere",
+          receiverZ: .44,
+          directional: false,
+          ambientOcclusion: 0,
+        });
+        const ambientSparse = await capture({
+          mode: "low",
+          ambientOcclusion: 1,
+        });
+        const ambientDense = await capture({ mode: "high" });
+        assert(
+          ambientSparse.center < ambientClear.center - 3,
+          `Hemisphere-only light must see sparse groom occlusion: ${
+            JSON.stringify({ ambientClear, ambientSparse })
+          }`,
+        );
+        assert(
+          ambientDense.center < ambientSparse.center - 12,
+          `Dense source fibers must occlude more ambient light: ${
+            JSON.stringify({ ambientSparse, ambientDense })
+          }`,
+        );
+        assertAlmostEquals(ambientDense.clear, ambientClear.clear, 1);
+        assert(
+          ambientDense.edge > ambientDense.center + 15,
+          "Ambient occlusion must preserve a sparse boundary",
+        );
+        assertEquals(ambientDense.lights, 0);
+        assertEquals(ambientDense.instances, 1);
+        assertEquals(ambientDense.ambientResolution, 32);
+        assertEquals(ambientDense.ambientDistance, .18);
+        assertEquals(ambientDense.textureBytes, 2 * 32 ** 3 * 4);
+        assertEquals(ambientDense.groomCast, true);
+        assertEquals(ambientDense.groomReceive, true);
+        assertEquals(ambientDense.hasRuntimeDepth, false);
+        const halfAmbient = await capture({ ambientOcclusion: .5 });
+        assertAlmostEquals(
+          halfAmbient.center,
+          (ambientClear.center + ambientDense.center) / 2,
+          2,
+        );
+        assertEquals(halfAmbient.ambientBuilds, ambientDense.ambientBuilds);
+        const normalAway = await capture({
+          ambientOcclusion: 1,
+          camera: [0, 0, -5],
+        });
+        assert(
+          normalAway.center > ambientDense.center + 20,
+          "Ambient visibility must follow the receiver normal, not darken every surface by a scalar",
+        );
+        assertAlmostEquals(normalAway.center, ambientClear.center, 2);
+        assertEquals(normalAway.ambientBuilds, ambientDense.ambientBuilds);
+        const ambientLod = await capture({
+          mode: "lod",
+          camera: [0, 0, 12],
+        });
+        assertEquals(ambientLod.ambientBuilds, ambientDense.ambientBuilds);
+        assertEquals(ambientLod.instances, 1);
+        assertAlmostEquals(ambientLod.center, ambientDense.center, 1);
+        const ambientDuplicate = await capture({ mode: "duplicate" });
+        assertEquals(
+          ambientDuplicate.ambientBuilds,
+          ambientDense.ambientBuilds,
+        );
+        assertEquals(ambientDuplicate.instances, 1);
+        assertAlmostEquals(ambientDuplicate.center, ambientDense.center, 1);
+        const ambientCamera = await capture({
+          mode: "high",
+          camera: [.6, .2, 5],
+        });
+        assertEquals(ambientCamera.ambientBuilds, ambientDense.ambientBuilds);
+        assertAlmostEquals(ambientCamera.center, ambientDense.center, 8);
+        const ambientAlternate = await capture({
+          camera: [-.4, .1, 5],
+          skipUpdate: true,
+        });
+        assertAlmostEquals(ambientAlternate.center, ambientDense.center, 8);
+        const ambientDistant = await capture({
+          camera: [0, 0, 5],
+          receiverZ: 0,
+        });
+        assertEquals(ambientDistant.ambientBuilds, ambientDense.ambientBuilds);
+        assertAlmostEquals(
+          ambientDistant.center,
+          ambientClear.center,
+          1,
+          "Local ambient influence must end before distant exposed skin",
+        );
+        const ambientMoved = await capture({ receiverZ: .44, offset: 1.1 });
+        assert(ambientMoved.ambientBuilds > ambientDense.ambientBuilds);
+        assertAlmostEquals(ambientMoved.center, ambientClear.center, 1);
+        const directOnly = await capture({
+          mode: "low",
+          offset: 0,
+          illumination: "directional",
+          directional: true,
+          ambientOcclusion: 0,
+        });
+        const combined = await capture({ ambientOcclusion: 1 });
+        assertEquals(combined.builds, directOnly.builds);
+        assertAlmostEquals(
+          combined.center,
+          directOnly.center,
+          1,
+          "Ambient occlusion must leave direct illumination unchanged",
+        );
+        assertEquals(combined.groomCast, false);
+        const ambientLightChanged = await capture({ light: [3, 0, 3] });
+        assert(ambientLightChanged.builds > combined.builds);
+        assertEquals(ambientLightChanged.ambientBuilds, combined.ambientBuilds);
+        const ambientOnly = await capture({
+          directional: false,
+          light: [0, 0, 3],
+        });
+        assertEquals(ambientOnly.groomCast, true);
+        assertEquals(ambientOnly.hasRuntimeDepth, false);
+        assertEquals(ambientOnly.ambientBuilds, combined.ambientBuilds);
+        const environmentClear = await capture({
+          mode: "high",
+          illumination: "environment",
+          metalness: 1,
+          ambientOcclusion: 0,
+        });
+        const environmentOccluded = await capture({ ambientOcclusion: 1 });
+        assert(
+          environmentOccluded.center < environmentClear.center - 10,
+          `Ambient volume must occlude rough environment reflections: ${
+            JSON.stringify({ environmentClear, environmentOccluded })
+          }`,
+        );
+        assertAlmostEquals(
+          environmentOccluded.clear,
+          environmentClear.clear,
+          1,
+        );
+        const document = JSON.parse(
+          await page.evaluate(() =>
+            (window as unknown as { volumeFixture: Fixture }).volumeFixture
+              .exportDocument()
+          ),
+        );
+        const serialized = JSON.stringify(document);
+        for (
+          const term of [
+            "worldToTexture",
+            "groomVolumeMap",
+            "groomVolumeAmbient",
+            "positiveData",
+            "negativeData",
+            "voxelSize",
+            "moments",
+            "storedMass",
+          ]
+        ) {
+          assert(
+            !serialized.includes(term),
+            `Runtime volume leaked into portable glTF: ${term}`,
+          );
+        }
+        assertEquals(
+          document.images.length,
+          1,
+          "Only the authored alpha atlas should be exported",
+        );
+        const roundTrip = await page.evaluate(() =>
+          (window as unknown as { volumeFixture: Fixture }).volumeFixture
+            .roundTrip()
+        );
+        assert(
+          roundTrip.markers > 0,
+          "glTF should retain the small groom marker",
+        );
+        assert(roundTrip.meshes > 0, "The actual GLB must reload its geometry");
+        assertEquals(
+          roundTrip.instances,
+          0,
+          "Portable GLB has no runtime volume",
+        );
+        assertEquals(roundTrip.ordinaryShadows, true);
+        assertEquals(roundTrip.portableMaterials, true);
+        assertEquals(roundTrip.mixedRejected, true);
+        const restored = await page.evaluate(() =>
+          (window as unknown as { volumeFixture: Fixture }).volumeFixture
+            .cleanup()
+        );
+        assertEquals(restored, {
+          callback: true,
+          key: true,
+          depth: true,
+          cast: true,
+          receive: true,
+        });
+        const probe = await page.evaluate(() =>
+          (window as unknown as { volumeFixture: Fixture }).volumeFixture
+            .callbackProbe()
+        );
+        assert(probe.keysDistinct);
+        assert(
+          probe.left[0] > probe.left[2] * 3,
+          `First prior shader callback was lost: ${probe.left}`,
+        );
+        assert(
+          probe.right[2] > probe.right[0] * 3,
+          `Second prior shader callback reused another program: ${probe.right}`,
+        );
+        assertEquals(
+          errors,
+          [],
+          "Volume shaders must compile without WebGL errors",
+        );
+      } finally {
+        await page.evaluate(() =>
           (window as unknown as { volumeFixture?: Fixture }).volumeFixture
             ?.close()
         ).catch(() => {});
       }
-      await viewer?.browser.close();
-      await server?.close();
-      esbuild.stop();
-      await Deno.remove(directory, { recursive: true });
-    }
+    }, { width: 192, height: 192 });
   },
 });

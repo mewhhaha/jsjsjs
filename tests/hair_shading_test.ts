@@ -3,7 +3,7 @@ import * as THREE from "three";
 import {
   groomHairMaterial,
   matchGroomShadowCoverage,
-} from "../src/hair-shading.ts";
+} from "../src/hair/hair-shading.ts";
 
 Deno.test("groom hair has a portable masked anisotropic material fallback", () => {
   const map = new THREE.Texture();

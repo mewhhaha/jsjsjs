@@ -17,7 +17,7 @@ guide *args:
     deno run -A main.ts guide "$@"
 
 # Emit portable modeling declarations and a typechecking config.
-types *args:
+types directory=".js3" *args:
     deno run -A main.ts types "$@"
 
 # Create an editable starter model, without overwriting existing files.
@@ -51,6 +51,10 @@ screenshot file output="output/model.png" *args:
 # Capture exact animation frames and a timestamp manifest in headless Chromium.
 frames file output="output/frames" *args:
     deno run -A main.ts frames "$@"
+
+# Bake an octahedral imposter atlas.png and manifest.json in headless Chromium.
+imposter file output="output/imposter" *args:
+    deno run -A main.ts imposter "$@"
 
 # Export GLB, OBJ, or BLEND (BLEND requires background Blender).
 export file output="output/model.glb" *args:

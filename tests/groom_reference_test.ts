@@ -11,7 +11,9 @@ import {
   packGroomReference,
   referenceAttachments,
 } from "../scripts/export-groom-reference.ts";
-import { createGroom, generateGroomStrands } from "../src/groom-data.ts";
+import { blenderCommand } from "../src/blender.ts";
+import { createGroom, generateGroomStrands } from "../src/hair/groom-data.ts";
+import { blenderAvailable } from "./support.ts";
 
 const source = () =>
   createGroom({
@@ -141,17 +143,7 @@ Deno.test("reference attachments reject unusable transforms", () => {
   );
 });
 
-const executable = Deno.env.get("JS3_BLENDER") ||
-  Deno.env.get("THREEJS_BLENDER") || "blender";
-let available = false;
-try {
-  available = new Deno.Command(executable, {
-    args: ["--background", "--version"],
-    env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
-    stdout: "null",
-    stderr: "null",
-  }).outputSync().success;
-} catch { /* Blender is an optional reference-render dependency. */ }
+const available = blenderAvailable();
 
 Deno.test({
   name:
@@ -159,7 +151,7 @@ Deno.test({
   ignore: !available,
   async fn() {
     const directory = await Deno.makeTempDir({
-      prefix: "threejs-cycles-reference-",
+      prefix: "js3-cycles-reference-",
     });
     try {
       const groom = source();
@@ -172,18 +164,11 @@ Deno.test({
         segments: 4,
         attachments: [{ name: "groom", matrixWorld: transform.toArray() }],
       });
-      const command = new Deno.Command(executable, {
-        args: [
-          "--background",
-          "--factory-startup",
-          "--disable-autoexec",
-          "--python-exit-code",
-          "1",
-          "--python",
-          fileURLToPath(
-            new URL("../scripts/render-groom-reference.py", import.meta.url),
-          ),
-          "--",
+      const command = blenderCommand(
+        fileURLToPath(
+          new URL("../scripts/render-groom-reference.py", import.meta.url),
+        ),
+        [
           "--source",
           join(directory, "reference.json"),
           "--output",
@@ -199,8 +184,7 @@ Deno.test({
           "--target",
           ".1,.7,0",
         ],
-        env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
-      });
+      );
       const rendered = await command.output();
       assert(rendered.success, new TextDecoder().decode(rendered.stderr));
       const report = JSON.parse(
@@ -269,20 +253,9 @@ for p, expected in zip(${JSON.stringify(landmarks)}, ${
     assert max(abs(a-b) for a,b in zip(projected[:2], expected)) < 0.000001
 `,
       );
-      const verified = await new Deno.Command(executable, {
-        args: [
-          "--background",
-          "--factory-startup",
-          "--disable-autoexec",
-          "--python-exit-code",
-          "1",
-          "--python",
-          script,
-          "--",
-          join(directory, "reference.blend"),
-        ],
-        env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
-      }).output();
+      const verified = await blenderCommand(script, [
+        join(directory, "reference.blend"),
+      ]).output();
       assert(verified.success, new TextDecoder().decode(verified.stderr));
     } finally {
       await Deno.remove(directory, { recursive: true });

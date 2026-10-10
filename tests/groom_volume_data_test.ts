@@ -5,7 +5,7 @@ import {
   assertThrows,
 } from "@std/assert";
 import * as THREE from "three";
-import type { GeneratedGroom, GroomXYZ } from "../src/groom-data.ts";
+import type { GeneratedGroom } from "../src/hair/groom-data.ts";
 import {
   type AmbientGroomVisibility,
   buildAmbientGroomVisibility,
@@ -13,10 +13,10 @@ import {
   type DirectionalGroomShadow,
   type GroomVolume,
   voxelizeGroom,
-} from "../src/groom-volume-data.ts";
+} from "../src/hair/groom-volume-data.ts";
 
 const identity = new THREE.Matrix4().elements;
-type Fiber = { points: GroomXYZ[]; radii: number[] };
+type Fiber = { points: THREE.Vector3Tuple[]; radii: number[] };
 
 function generated(fibers: Fiber[]): GeneratedGroom {
   return {
@@ -60,7 +60,7 @@ function slab(layers = [-.2, .2], radius = .004, copies = 1): GeneratedGroom {
 }
 
 /** Same normalized linear sampler/decoding as an RG16 Data3DTexture. */
-function tau(map: DirectionalGroomShadow, world: GroomXYZ) {
+function tau(map: DirectionalGroomShadow, world: THREE.Vector3Tuple) {
   const p = new THREE.Vector3(...world).applyMatrix4(
     new THREE.Matrix4().fromArray(map.worldToTexture),
   );
@@ -90,7 +90,7 @@ function tau(map: DirectionalGroomShadow, world: GroomXYZ) {
 
 function shadow(
   volume: GroomVolume,
-  direction: GroomXYZ = [0, 0, 1],
+  direction: THREE.Vector3Tuple = [0, 0, 1],
   matrixWorld: readonly number[] = identity,
 ) {
   return buildDirectionalGroomShadow([{ volume, matrixWorld }], direction, {
@@ -99,7 +99,10 @@ function shadow(
 }
 
 /** Match linear, clamp-to-edge RGBA8 sampling used by the ambient renderer. */
-function ambientDirections(map: AmbientGroomVisibility, world: GroomXYZ) {
+function ambientDirections(
+  map: AmbientGroomVisibility,
+  world: THREE.Vector3Tuple,
+) {
   const p = new THREE.Vector3(...world).applyMatrix4(
     new THREE.Matrix4().fromArray(map.worldToTexture),
   ).toArray();
@@ -179,7 +182,7 @@ Deno.test("Beer transmittance responds to slab thickness, density and fiber radi
   const thick = make([-.2, .2]);
   const dense = make([-.2], .004, 2);
   const wide = make([-.2], .008);
-  const point: GroomXYZ = [0, 0, -2];
+  const point: THREE.Vector3Tuple = [0, 0, -2];
   const a = tau(single, point),
     b = tau(thick, point),
     c = tau(dense, point),
@@ -277,7 +280,7 @@ Deno.test("translated, rotated and uniformly scaled instances preserve Beer atte
 Deno.test("nonuniform affine instance area matches an equivalent transformed density grid", () => {
   const volume = voxelizeGroom(slab(), { resolution: 32 });
   // X-directed fibers: transverse Y/Z radius scales equally by2; length by3.
-  const scales: GroomXYZ = [3, 2, 2];
+  const scales: THREE.Vector3Tuple = [3, 2, 2];
   const transformed = shadow(
     volume,
     [0, 0, 1],
@@ -286,12 +289,16 @@ Deno.test("nonuniform affine instance area matches an equivalent transformed den
   const equivalent: GroomVolume = {
     ...volume,
     bounds: {
-      min: volume.bounds.min.map((value, k) => value * scales[k]) as GroomXYZ,
-      max: volume.bounds.max.map((value, k) => value * scales[k]) as GroomXYZ,
+      min: volume.bounds.min.map((value, k) =>
+        value * scales[k]
+      ) as THREE.Vector3Tuple,
+      max: volume.bounds.max.map((value, k) =>
+        value * scales[k]
+      ) as THREE.Vector3Tuple,
     },
     voxelSize: volume.voxelSize.map((value, k) =>
       value * scales[k]
-    ) as GroomXYZ,
+    ) as THREE.Vector3Tuple,
     mass: volume.mass.map((value) => value * 6),
     moments: volume.moments.map((value) => value * 6),
   };
@@ -437,7 +444,7 @@ Deno.test("ambient density conserves each projected area and finite Beer attenua
     ambient(voxelizeGroom(slab(layers, radius, copies), { resolution: 48 }));
   const thin = make(), dense = make([0], .004, 2);
   const thick = make([0, .04]), wide = make([0], .008);
-  const p: GroomXYZ = [0, 0, -.08];
+  const p: THREE.Vector3Tuple = [0, 0, -.08];
   const value = ambientDirections(thin, p).positive[2];
   const doubled = ambientDirections(dense, p).positive[2];
   // An X-aligned sheet has transverse optical depth 2r * 48. The local
@@ -468,7 +475,7 @@ Deno.test("ambient density conserves each projected area and finite Beer attenua
 Deno.test("ambient falloff reverses by direction, reaches receivers outside source bounds and becomes clear beyond its local reach", () => {
   const volume = voxelizeGroom(slab([-.45, .45]), { resolution: 48 });
   const map = ambient(volume, .2);
-  const below: GroomXYZ = [0, 0, volume.bounds.min[2] - .02];
+  const below: THREE.Vector3Tuple = [0, 0, volume.bounds.min[2] - .02];
   const near = ambientDirections(map, below);
   assert(
     near.positive[2] < .9,
@@ -478,7 +485,13 @@ Deno.test("ambient falloff reverses by direction, reaches receivers outside sour
   const above = ambientDirections(map, [0, 0, -below[2]]);
   assertAlmostEquals(above.negative[2], near.positive[2], .002);
   assertAlmostEquals(above.positive[2], 1, 1e-12);
-  for (const point of [[0, 0, -.8], [0, 0, .8], [2, 0, -.55]] as GroomXYZ[]) {
+  for (
+    const point of [[0, 0, -.8], [0, 0, .8], [
+      2,
+      0,
+      -.55,
+    ]] as THREE.Vector3Tuple[]
+  ) {
     const clear = ambientDirections(map, point);
     for (const value of [...clear.positive, ...clear.negative]) {
       assertAlmostEquals(value, 1, 1e-12);
@@ -540,7 +553,7 @@ Deno.test("ambient field is deterministic and affine instances transform orienta
   assertAlmostEquals(scaled.distance, base.distance * 2, 1e-12);
   assertEquals(scaled.positiveData, base.positiveData);
   assertEquals(scaled.negativeData, base.negativeData);
-  const p: GroomXYZ = [0, 0, -.18];
+  const p: THREE.Vector3Tuple = [0, 0, -.18];
   const rotation = new THREE.Matrix4().makeRotationZ(Math.PI / 2);
   const rotated = ambient(volume, .4, rotation.elements);
   const original = ambient(volume);
@@ -554,7 +567,7 @@ Deno.test("ambient field is deterministic and affine instances transform orienta
   assertAlmostEquals(rotated.statistics.projectedMass[1], 0, 1e-12);
   assert(rotated.statistics.projectedMass[0] > 0);
 
-  const scales: GroomXYZ = [3, 2, 2];
+  const scales: THREE.Vector3Tuple = [3, 2, 2];
   const nonuniform = ambient(
     volume,
     .8,
@@ -563,12 +576,16 @@ Deno.test("ambient field is deterministic and affine instances transform orienta
   const equivalent: GroomVolume = {
     ...volume,
     bounds: {
-      min: volume.bounds.min.map((value, k) => value * scales[k]) as GroomXYZ,
-      max: volume.bounds.max.map((value, k) => value * scales[k]) as GroomXYZ,
+      min: volume.bounds.min.map((value, k) =>
+        value * scales[k]
+      ) as THREE.Vector3Tuple,
+      max: volume.bounds.max.map((value, k) =>
+        value * scales[k]
+      ) as THREE.Vector3Tuple,
     },
     voxelSize: volume.voxelSize.map((value, k) =>
       value * scales[k]
-    ) as GroomXYZ,
+    ) as THREE.Vector3Tuple,
     mass: volume.mass.map((value) => value * 6),
     moments: volume.moments.map((value) => value * 6),
   };
@@ -632,7 +649,7 @@ Deno.test("ambient allocations, finite reach, malformed fields and projection wo
   const dense: GroomVolume = {
     ...volume,
     resolution: 64,
-    voxelSize: volume.voxelSize.map((value) => value / 4) as GroomXYZ,
+    voxelSize: volume.voxelSize.map((value) => value / 4) as THREE.Vector3Tuple,
     indices: Uint32Array.from({ length: many }, (_, i) => i),
     mass: new Float32Array(many).fill(1),
     moments: Float32Array.from({ length: many * 6 }, (_, i) => i % 6 ? 0 : 1),

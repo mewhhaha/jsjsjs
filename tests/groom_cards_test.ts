@@ -6,15 +6,18 @@ import {
   assertThrows,
 } from "@std/assert";
 import * as THREE from "three";
-import { type BakedGroomCards, bakeGroomCards } from "../src/groom-cards.ts";
+import {
+  type BakedGroomCards,
+  bakeGroomCards,
+} from "../src/hair/groom-cards.ts";
 import {
   type GeneratedGroom,
   generateGroomStrands,
   type GroomFiber,
   type GuideGroom,
-} from "../src/groom-data.ts";
-import { hairCards, hairCardTextures } from "../src/hair-cards.ts";
-import { compileGroom, renderGroom } from "../src/groom.ts";
+} from "../src/hair/groom-data.ts";
+import { hairCards, hairCardTextures } from "../src/hair/hair-cards.ts";
+import { compileGroom, renderGroom } from "../src/hair/groom.ts";
 
 function fixture(): GeneratedGroom {
   return {

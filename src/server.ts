@@ -10,6 +10,14 @@ export interface BuildState {
   error: string | null;
 }
 
+/** Stores one uploaded file; a rejection fails that upload. */
+export type UploadSink = (
+  path: string,
+  body: ReadableStream<Uint8Array>,
+) => Promise<void>;
+
+export type ModelServer = Awaited<ReturnType<typeof startServer>>;
+
 // A single Three.js instance is shared by the viewer and all model bundles.
 const sharedThree: esbuild.Plugin = {
   name: "shared-three",
@@ -20,7 +28,7 @@ const sharedThree: esbuild.Plugin = {
     );
     // Model helpers resolve from the CLI checkout, even for external models.
     build.onResolve(
-      { filter: /^(?:js3|threejs)(?:\/(?:prelude|api))?$/ },
+      { filter: /^js3(?:\/(?:prelude|api))?$/ },
       (args) => ({
         path: resolve(
           root,
@@ -39,6 +47,7 @@ const sharedThree: esbuild.Plugin = {
     );
   },
 };
+const uploads = "/_js3/upload/";
 const options: esbuild.BuildOptions = {
   bundle: true,
   write: false,
@@ -57,6 +66,10 @@ export async function startServer(filename: string, port = 8000) {
   }
   const state: BuildState = { revision: 0, error: null };
   let modelJS = "";
+  const receivers = new Map<string, {
+    accept(req: Request, path: string | null): Promise<Response>;
+    close(): Promise<void>;
+  }>();
   const listeners = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
   const publish = () => {
@@ -122,6 +135,12 @@ export async function startServer(filename: string, port = 8000) {
         new Response(body, {
           headers: { ...headers, "content-type": "text/javascript" },
         });
+      if (req.method === "POST" && url.pathname.startsWith(uploads)) {
+        const receiver = receivers.get(url.pathname.slice(uploads.length));
+        return receiver
+          ? await receiver.accept(req, url.searchParams.get("path"))
+          : new Response("Not found", { status: 404 });
+      }
       if (req.method !== "GET") {
         return new Response("Method not allowed", { status: 405 });
       }
@@ -194,10 +213,66 @@ export async function startServer(filename: string, port = 8000) {
         }
       }
     });
+    const base = `http://127.0.0.1:${server.addr.port}`;
     return {
-      url: `http://127.0.0.1:${server.addr.port}`,
+      url: base,
       state,
+      /**
+       * Accept POSTed files at `<url>?path=<relative path>` until closed. Each
+       * body is streamed to the sink and fails once it exceeds `limit` bytes.
+       */
+      receive(sink: UploadSink, options: { limit: number }) {
+        const token = crypto.randomUUID();
+        const cancel = new AbortController();
+        const active = new Set<Promise<unknown>>();
+        const accept = async (req: Request, path: string | null) => {
+          if (!path || !req.body) {
+            return new Response("Missing upload path or body", { status: 400 });
+          }
+          if (Number(req.headers.get("content-length")) > options.limit) {
+            await req.body.cancel();
+            return new Response("Upload too large", { status: 413 });
+          }
+          let received = 0;
+          const body = req.body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                received += chunk.byteLength;
+                if (received > options.limit) {
+                  throw new RangeError(
+                    `Upload exceeds ${options.limit} bytes.`,
+                  );
+                }
+                controller.enqueue(chunk);
+              },
+            }),
+            { signal: cancel.signal },
+          );
+          const task = sink(path, body);
+          active.add(task);
+          try {
+            await task;
+            return new Response(null, { status: 204 });
+          } catch (error) {
+            await body.cancel().catch(() => {});
+            return new Response(
+              error instanceof Error ? error.message : String(error),
+              { status: error instanceof RangeError ? 413 : 400 },
+            );
+          } finally {
+            active.delete(task);
+          }
+        };
+        const close = async () => {
+          receivers.delete(token);
+          cancel.abort();
+          await Promise.allSettled(active);
+        };
+        receivers.set(token, { accept, close });
+        return { url: `${base}${uploads}${token}`, close };
+      },
       async close() {
+        await Promise.all([...receivers.values()].map((r) => r.close()));
         for (const listener of listeners) {
           try {
             listener.close();

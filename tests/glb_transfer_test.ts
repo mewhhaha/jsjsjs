@@ -1,187 +1,231 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import * as esbuild from "esbuild";
-import { writeGLBOutput } from "../main.ts";
-import { startServer } from "../src/server.ts";
-import { launchViewer, waitForModel } from "../src/browser.ts";
+import { receiveGLB } from "../src/cli/output.ts";
+import { chromiumAvailable, withViewer } from "./support.ts";
+
+declare global {
+  interface Window {
+    uploadURL?: string;
+    exportedGLB?: string;
+  }
+}
+
+const digest = (bytes: Uint8Array) =>
+  createHash("sha256").update(bytes).digest("hex");
+
+async function until(condition: () => Promise<boolean>) {
+  while (!(await condition())) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 Deno.test({
   name:
-    "GLB chunks reproduce binary exports and preserve existing files on failed transfers",
+    "GLB uploads reproduce binary exports and preserve existing files on failed transfers",
+  ignore: !chromiumAvailable,
   sanitizeOps: false,
   sanitizeResources: false,
   async fn(t) {
-    const directory = await Deno.makeTempDir({
-      prefix: "js3-glb-transfer-",
-    });
-    let server: Awaited<ReturnType<typeof startServer>> | undefined;
-    let viewer: Awaited<ReturnType<typeof launchViewer>> | undefined;
-    try {
-      const file = `${directory}/model.ts`;
-      await Deno.writeTextFile(
-        file,
-        `import {THREE} from "js3";
-export default () => new THREE.Mesh(new THREE.PlaneGeometry(2,2,320,320),
+    await withViewer(
+      `import {THREE} from "js3";
+export default () => new THREE.Mesh(new THREE.PlaneGeometry(2,2,160,160),
   new THREE.MeshStandardMaterial({color:"#65998a",side:THREE.DoubleSide}));`,
-      );
-      server = await startServer(file, 0);
-      viewer = await launchViewer(server.url, {
-        renderer: "software",
-        width: 128,
-        height: 128,
-      });
-      await waitForModel(viewer.page);
-      const page = viewer.page;
-      const output = `${directory}/model.glb`;
-      const signal = new AbortController().signal;
-      let expected: string;
-      const digest = (bytes: Uint8Array) =>
-        createHash("sha256").update(bytes).digest("hex");
-      await t.step(
-        "bounded chunks exactly match the existing public export",
-        async () => {
-          const transfer = await page.evaluate(() =>
-            window.modelViewer.beginGLBExport()
-          );
-          assert(transfer.chunks >= 2);
-          assert(transfer.chunkSize <= 8 * 1024 * 1024);
-          await assertRejects(
-            () => page.evaluate(() => window.modelViewer.beginGLBExport()),
-            Error,
-            "already active",
-          );
-          await assertRejects(
-            () =>
-              page.evaluate(
-                (id) => window.modelViewer.readGLBExportChunk(id, -1),
-                transfer.id,
-              ),
-            Error,
-            "out of range",
-          );
-          await page.evaluate(
-            (id) => window.modelViewer.endGLBExport(id),
-            transfer.id,
-          );
-          await assertRejects(
-            () =>
-              page.evaluate(
-                (id) => window.modelViewer.readGLBExportChunk(id, 0),
-                transfer.id,
-              ),
-            Error,
-            "expired",
-          );
-          await writeGLBOutput(page, output, signal);
-          const bytes = await Deno.readFile(output);
-          const header = new DataView(
-            bytes.buffer,
-            bytes.byteOffset,
-            bytes.byteLength,
-          );
-          assertEquals(header.getUint32(0, true), 0x46546c67);
-          assertEquals(header.getUint32(4, true), 2);
-          assertEquals(header.getUint32(8, true), bytes.byteLength);
-          assertEquals(bytes.byteLength, transfer.byteLength);
-          const encoded = await page.evaluate(() =>
-            window.modelViewer.exportGLB()
-          );
-          expected = await digest(Buffer.from(encoded, "base64"));
-          assertEquals(await digest(bytes), expected);
-        },
-      );
-      const originalRead = await page.evaluateHandle(() =>
-        window.modelViewer.readGLBExportChunk
-      );
-      try {
-        await t.step(
-          "an empty later chunk cannot overwrite a valid output",
-          async () => {
-            await page.evaluate(() => {
-              const read = window.modelViewer.readGLBExportChunk;
-              window.modelViewer.readGLBExportChunk = (id, index) =>
-                index === 1 ? "" : read(id, index);
-            });
-            await assertRejects(
-              () => writeGLBOutput(page, output, signal),
-              Error,
-              "empty or incomplete",
-            );
-            assertEquals(await digest(await Deno.readFile(output)), expected);
-            const temporaryFiles = [];
-            for await (const entry of Deno.readDir(directory)) {
-              if (entry.name.startsWith(".js3-")) {
-                temporaryFiles.push(entry.name);
-              }
-            }
-            assertEquals(temporaryFiles, []);
-          },
+      async ({ page, server, dir: directory }) => {
+        const output = `${directory}/model.glb`;
+        const signal = new AbortController().signal;
+        const temporaries = async () => {
+          const names = [];
+          for await (const entry of Deno.readDir(directory)) {
+            if (entry.name.startsWith(".js3-")) names.push(entry.name);
+          }
+          return names;
+        };
+        const uploadGLB = await page.evaluateHandle(() =>
+          window.modelViewer.uploadGLB
         );
-        await page.evaluate((read) => {
-          window.modelViewer.readGLBExportChunk = read;
-        }, originalRead);
+        const restore = () =>
+          page.evaluate((upload) => {
+            window.modelViewer.uploadGLB = upload;
+          }, uploadGLB);
+        let expected = "";
         await t.step(
-          "an invalid binary header cannot overwrite a valid output",
+          "uploads exactly match the base64 export and close their receiver",
           async () => {
             await page.evaluate(() => {
-              const read = window.modelViewer.readGLBExportChunk;
-              window.modelViewer.readGLBExportChunk = (id, index) => {
-                const encoded = read(id, index);
-                return index === 0
-                  ? btoa("BAD!" + atob(encoded).slice(4))
-                  : encoded;
+              const upload = window.modelViewer.uploadGLB;
+              window.modelViewer.uploadGLB = (url) => {
+                window.uploadURL = url;
+                return upload(url);
               };
             });
-            await assertRejects(
-              () => writeGLBOutput(page, output, signal),
-              Error,
-              "invalid header",
+            await receiveGLB(server, page, output, signal);
+            await restore();
+            const bytes = await Deno.readFile(output);
+            assert(bytes.byteLength > 1024 * 1024);
+            const header = new DataView(
+              bytes.buffer,
+              bytes.byteOffset,
+              bytes.byteLength,
             );
-            assertEquals(await digest(await Deno.readFile(output)), expected);
+            assertEquals(header.getUint32(0, true), 0x46546c67);
+            assertEquals(header.getUint32(4, true), 2);
+            assertEquals(header.getUint32(8, true), bytes.byteLength);
+            const encoded = await page.evaluate(async () =>
+              window.exportedGLB = await window.modelViewer.exportGLB()
+            );
+            expected = digest(Buffer.from(encoded, "base64"));
+            assertEquals(digest(bytes), expected);
+            const url = await page.evaluate(() => window.uploadURL!);
+            for (
+              const target of [
+                url,
+                `${server.url}/_js3/upload/${crypto.randomUUID()}`,
+              ]
+            ) {
+              const response = await fetch(`${target}?path=model.glb`, {
+                method: "POST",
+                body: bytes.subarray(0, 64),
+              });
+              await response.body?.cancel();
+              assertEquals(response.status, 404);
+            }
+            assertEquals(await temporaries(), []);
           },
         );
-      } finally {
-        await page.evaluate((read) => {
-          window.modelViewer.readGLBExportChunk = read;
-        }, originalRead);
-        await originalRead.dispose();
-      }
-      const originalBegin = await page.evaluateHandle(() =>
-        window.modelViewer.beginGLBExport
-      );
-      try {
+        for (
+          const [mode, message] of [
+            ["header", "GLB upload has an invalid header."],
+            ["truncated", "GLB upload length does not match its header."],
+            ["path", "Unexpected GLB upload path: ../model.glb"],
+            ["duplicate", "Unexpected GLB upload path: model.glb"],
+            ["missing", "Viewer did not upload model.glb."],
+            ["ignored", "GLB upload has an invalid header."],
+          ]
+        ) {
+          await t.step(
+            `a ${mode} upload cannot overwrite a valid output`,
+            async () => {
+              await page.evaluate((mode) => {
+                const bytes = Uint8Array.from(
+                  atob(window.exportedGLB!),
+                  (char) => char.charCodeAt(0),
+                );
+                if (mode === "header" || mode === "ignored") {
+                  bytes.set([66, 65, 68, 33]);
+                }
+                const body = mode === "truncated"
+                  ? bytes.subarray(0, bytes.byteLength - 4)
+                  : bytes;
+                window.modelViewer.uploadGLB = async (url) => {
+                  if (mode === "missing") return;
+                  const target = new URL(url);
+                  target.searchParams.set(
+                    "path",
+                    mode === "path" ? "../model.glb" : "model.glb",
+                  );
+                  for (const _ of mode === "duplicate" ? [0, 1] : [0]) {
+                    const response = await fetch(target, {
+                      method: "POST",
+                      body,
+                    });
+                    const text = await response.text();
+                    if (!response.ok && mode !== "ignored") {
+                      throw new Error(text);
+                    }
+                  }
+                };
+              }, mode);
+              try {
+                await assertRejects(
+                  () => receiveGLB(server, page, output, signal),
+                  Error,
+                  message,
+                );
+              } finally {
+                await restore();
+              }
+              assertEquals(digest(await Deno.readFile(output)), expected);
+              assertEquals(await temporaries(), []);
+            },
+          );
+        }
         await t.step(
-          "empty export metadata fails instead of reporting success",
+          "receivers bound uploads and require a path",
+          async () => {
+            const receiver = server.receive(async (_, body) => {
+              for await (const _ of body) { /* drain */ }
+            }, { limit: 16 });
+            try {
+              for (
+                const [path, body, status] of [
+                  ["a", new Uint8Array(17), 413],
+                  [
+                    "a",
+                    ReadableStream.from([new Uint8Array(9), new Uint8Array(9)]),
+                    413,
+                  ],
+                  ["", new Uint8Array(1), 400],
+                  ["a", new Uint8Array(16), 204],
+                ] as const
+              ) {
+                const response = await fetch(`${receiver.url}?path=${path}`, {
+                  method: "POST",
+                  body,
+                });
+                await response.body?.cancel();
+                assertEquals(response.status, status);
+              }
+            } finally {
+              await receiver.close();
+            }
+          },
+        );
+        await t.step(
+          "aborting mid-upload removes partial files and keeps the output",
           async () => {
             await page.evaluate(() => {
-              window.modelViewer.beginGLBExport = () =>
-                Promise.resolve({
-                  id: "failed-export",
-                  byteLength: 0,
-                  chunkSize: 3 * 1024 * 1024,
-                  chunks: 0,
-                });
+              window.uploadURL = undefined;
+              window.modelViewer.uploadGLB = (url) => {
+                window.uploadURL = url;
+                return new Promise(() => {});
+              };
             });
-            await assertRejects(
-              () => writeGLBOutput(page, output, signal),
-              Error,
-              "invalid GLB transfer metadata",
+            const controller = new AbortController();
+            const pending = receiveGLB(server, page, output, controller.signal);
+            const url = await (await page.waitForFunction(() =>
+              window.uploadURL
+            ))
+              .jsonValue();
+            const { readable, writable } = new TransformStream<
+              Uint8Array,
+              Uint8Array
+            >();
+            const writer = writable.getWriter();
+            const request = fetch(`${url}?path=model.glb`, {
+              method: "POST",
+              body: readable,
+            }).catch((error: unknown) => error);
+            await writer.write(
+              (await Deno.readFile(output)).subarray(0, 65536),
             );
-            assertEquals(await digest(await Deno.readFile(output)), expected);
+            await until(async () => (await temporaries()).length > 0);
+            controller.abort();
+            await assertRejects(() => pending);
+            assertEquals(await temporaries(), []);
+            assertEquals(digest(await Deno.readFile(output)), expected);
+            await writer.abort().catch(() => {});
+            const response = await request;
+            if (response instanceof Response) {
+              await response.body?.cancel();
+              assertEquals(response.status, 400);
+            }
+            await restore();
           },
         );
-      } finally {
-        await page.evaluate((begin) => {
-          window.modelViewer.beginGLBExport = begin;
-        }, originalBegin);
-        await originalBegin.dispose();
-      }
-    } finally {
-      await viewer?.browser.close();
-      await server?.close();
-      esbuild.stop();
-      await Deno.remove(directory, { recursive: true });
-    }
+        await uploadGLB.dispose();
+      },
+      { width: 128, height: 128 },
+    );
   },
 });

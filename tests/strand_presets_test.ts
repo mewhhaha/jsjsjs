@@ -1,6 +1,6 @@
 import { assert, assertAlmostEquals, assertEquals } from "@std/assert";
-import { fur, grass } from "../src/strand-presets.ts";
-import { type StrandData } from "../src/strand-data.ts";
+import { fur, grass } from "../src/hair/strand-presets.ts";
+import { type StrandData } from "../src/hair/strand-data.ts";
 import { THREE } from "../src/prelude.ts";
 
 function emitter() {

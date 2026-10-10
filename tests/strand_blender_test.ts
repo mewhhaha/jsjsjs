@@ -1,19 +1,10 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { join } from "node:path";
 import * as THREE from "three";
-import { exportBlend } from "../src/blender.ts";
+import { blenderCommand, exportBlend } from "../src/blender.ts";
+import { blenderAvailable } from "./support.ts";
 
-const executable = Deno.env.get("JS3_BLENDER") ||
-  Deno.env.get("THREEJS_BLENDER") || "blender";
-let available = false;
-try {
-  available = new Deno.Command(executable, {
-    args: ["--background", "--version"],
-    env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
-    stdout: "null",
-    stderr: "null",
-  }).outputSync().success;
-} catch { /* Blender is an optional exporter dependency. */ }
+const available = blenderAvailable();
 
 // A portable glTF fixture avoids requiring a browser and independently checks
 // metadata conversion, including nested, nonuniform transforms on every axis.
@@ -160,20 +151,7 @@ assert abs(variation.inputs[1].default_value - 0.5) < 1e-6
 `,
       );
       const verifyBlend = async (file: string, representation: string) => {
-        const result = await new Deno.Command(executable, {
-          args: [
-            "--background",
-            "--factory-startup",
-            "--disable-autoexec",
-            "--python-exit-code",
-            "1",
-            "--python",
-            verify,
-            "--",
-            representation,
-            file,
-          ],
-          env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
+        const result = await blenderCommand(verify, [representation, file], {
           stdout: "piped",
           stderr: "piped",
         }).output();

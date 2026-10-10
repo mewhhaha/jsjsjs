@@ -1,7 +1,12 @@
 /** Solid modeling uses Manifold WASM, loaded lazily on first operation. */
 import * as THREE from "three";
 import type { Manifold, ManifoldToplevel } from "manifold-3d";
-import { extrude, material, type MeshOptions, transform } from "./prelude.ts";
+import {
+  extrude,
+  material,
+  type MeshOptions,
+  transform,
+} from "./primitives.ts";
 
 export type Outline = THREE.Shape | readonly (readonly [number, number])[];
 export interface SolidOptions extends MeshOptions {

@@ -2,8 +2,9 @@
   "nodeModulesDir": "auto",
   "tasks": {
     "dev": "deno run -A main.ts serve examples/bracket.ts",
-    "check": "deno fmt --check && deno lint && deno check main.ts src/*.ts web/*.ts examples/*.ts scripts/*.ts tests/*.ts",
+    "check": "deno fmt --check && deno lint && deno check main.ts src/*.ts src/cli/*.ts src/hair/*.ts web/*.ts examples/*.ts scripts/*.ts tests/*.ts tests/fixtures/*.ts",
     "test": "deno test -A tests/",
+    "test:unit": "JS3_SKIP_BROWSER=1 JS3_SKIP_BLENDER=1 deno test -A tests/",
     "setup": "deno run -A npm:playwright@1.63.0 install chromium"
   },
   "imports": {
@@ -15,9 +16,6 @@
     "js3": "./src/prelude.ts",
     "js3/prelude": "./src/prelude.ts",
     "js3/api": "./web/api.ts",
-    "threejs": "./src/prelude.ts",
-    "threejs/prelude": "./src/prelude.ts",
-    "threejs/api": "./web/api.ts",
     "@std/assert": "jsr:@std/assert@1",
     "@types/three": "npm:@types/three@0.185.0"
   },
@@ -25,9 +23,9 @@
     "lib": ["deno.window", "dom", "dom.iterable"],
     "types": ["@types/three"]
   },
-  "fmt": { "exclude": ["output/", ".js3/", ".threejs/"] },
+  "fmt": { "exclude": ["output/", ".js3/"] },
   "lint": {
-    "exclude": ["output/", ".js3/", ".threejs/"],
+    "exclude": ["output/", ".js3/"],
     "rules": { "exclude": ["no-window"] }
   }
 }

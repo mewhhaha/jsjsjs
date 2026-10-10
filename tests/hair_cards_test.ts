@@ -10,7 +10,7 @@ import {
   createHairCardAtlas,
   type HairCardGuide,
   hairCards,
-} from "../src/hair-cards.ts";
+} from "../src/hair/hair-cards.ts";
 
 const guide = (): HairCardGuide => ({
   points: [[0, 0, 0], [0, 1, 0], [0, 2, 0]],

@@ -5,7 +5,7 @@ import {
   assertThrows,
 } from "@std/assert";
 import * as THREE from "three";
-import { arch, type ArchOptions } from "../src/arch.ts";
+import { arch, type ArchOptions } from "../src/architecture.ts";
 
 function bounds(object: THREE.Object3D): THREE.Box3 {
   object.updateWorldMatrix(true, true);

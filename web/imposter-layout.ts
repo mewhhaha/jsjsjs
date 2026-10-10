@@ -1,5 +1,6 @@
 /** Capture directions and atlas metadata for Y-up octahedral imposters. */
-export type ImposterVector3 = [number, number, number];
+import type { Vector3Tuple } from "three";
+
 export type ImposterUV = [number, number];
 export type ImposterCoverage = 180 | 360;
 
@@ -38,10 +39,10 @@ export interface ImposterTile {
   /** Endpoint lattice coordinates; these are NOT texture pixel coordinates. */
   octUV: ImposterUV;
   /** Unit vector pointing from the model center toward the camera. */
-  direction: ImposterVector3;
+  direction: Vector3Tuple;
   /** Orthonormal camera basis, with direction pointing backward from the camera. */
-  up: ImposterVector3;
-  right: ImposterVector3;
+  up: Vector3Tuple;
+  right: Vector3Tuple;
   /** Whole tile, in pixels from the atlas's top-left corner. */
   rect: ImposterRect;
   /** Rendered square excluding transparent gutters, in atlas pixels. */
@@ -56,7 +57,7 @@ export interface ImposterManifest {
   options: ResolvedImposterOptions;
   atlas: { width: number; height: number; origin: "top-left" };
   /** World-space center of the shared capture bounding sphere and camera target. */
-  center: ImposterVector3;
+  center: Vector3Tuple;
   radius: number;
   orthographic: { width: number; height: number };
   conventions: {
@@ -127,7 +128,7 @@ function signNonZero(value: number): number {
   return value < 0 ? -1 : 1;
 }
 
-function normalize(vector: readonly number[]): ImposterVector3 {
+function normalize(vector: readonly number[]): Vector3Tuple {
   if (vector.length !== 3 || !vector.every(Number.isFinite)) {
     throw new Error("Imposter direction must contain three finite numbers");
   }
@@ -142,7 +143,7 @@ function normalize(vector: readonly number[]): ImposterVector3 {
 export function decodeImposterDirection(
   octUV: readonly [number, number],
   coverage: ImposterCoverage = 180,
-): ImposterVector3 {
+): Vector3Tuple {
   checkCoverage(coverage);
   if (
     octUV.length !== 2 ||
@@ -193,7 +194,7 @@ export function encodeImposterDirection(
   return [(x + 1) / 2, (z + 1) / 2];
 }
 
-function cross(a: ImposterVector3, b: ImposterVector3): ImposterVector3 {
+function cross(a: Vector3Tuple, b: Vector3Tuple): Vector3Tuple {
   return [
     a[1] * b[2] - a[2] * b[1],
     a[2] * b[0] - a[0] * b[2],
@@ -220,7 +221,7 @@ export function makeImposterLayout(
     for (let col = 0; col < grid; col++) {
       const octUV: ImposterUV = [col / (grid - 1), row / (grid - 1)];
       const direction = decodeImposterDirection(octUV, coverage);
-      const seedUp: ImposterVector3 = Math.abs(direction[1]) > 0.999999
+      const seedUp: Vector3Tuple = Math.abs(direction[1]) > 0.999999
         ? [0, 0, -1]
         : [0, 1, 0];
       const right = normalize(cross(seedUp, direction));

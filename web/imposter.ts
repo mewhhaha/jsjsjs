@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
-import { matchGroomShadowCoverage } from "../src/hair-shading.ts";
+import { matchGroomShadowCoverage } from "../src/hair/hair-shading.ts";
 import {
   type ImposterManifest,
   type ImposterOptions,

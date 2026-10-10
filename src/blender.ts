@@ -1,5 +1,47 @@
 import { basename, dirname, join, resolve } from "node:path";
 
+/** Blender from JS3_BLENDER, otherwise from PATH. */
+export function blenderExecutable(): string {
+  return Deno.env.get("JS3_BLENDER") || "blender";
+}
+
+/** Run a Python script in an isolated, windowless Blender with these args. */
+export function blenderCommand(
+  script: string,
+  args: string[],
+  options: Omit<Deno.CommandOptions, "args"> = {},
+): Deno.Command {
+  return new Deno.Command(blenderExecutable(), {
+    ...options,
+    args: [
+      "--background",
+      "--factory-startup",
+      "--disable-autoexec",
+      "--python-exit-code",
+      "1",
+      "--python",
+      script,
+      "--",
+      ...args,
+    ],
+    env: { ...options.env, DISPLAY: "", WAYLAND_DISPLAY: "" },
+  });
+}
+
+/** Whether Blender starts; optional integrations skip without it. */
+export function blenderAvailable(): boolean {
+  try {
+    return new Deno.Command(blenderExecutable(), {
+      args: ["--background", "--version"],
+      env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
+      stdout: "null",
+      stderr: "null",
+    }).outputSync().success;
+  } catch {
+    return false;
+  }
+}
+
 /** Convert glTF's portable scene data to a native Blender document. */
 export async function exportBlend(
   glb: Uint8Array,
@@ -22,7 +64,7 @@ export async function exportBlend(
     const script = join(temporary, "export-blend.py");
     await Deno.writeFile(input, glb);
     await Deno.copyFile(
-      new URL("../scripts/export-blend.py", import.meta.url),
+      new URL("./export-blend.py", import.meta.url),
       script,
     );
     const sourceArgs: string[] = [];
@@ -32,25 +74,9 @@ export async function exportBlend(
       sourceArgs.push(source, basename(sourceFile));
     }
     signal.throwIfAborted();
-    const executable = Deno.env.get("JS3_BLENDER") ||
-      Deno.env.get("THREEJS_BLENDER") || "blender";
     let child: Deno.ChildProcess;
     try {
-      child = new Deno.Command(executable, {
-        args: [
-          "--background",
-          "--factory-startup",
-          "--disable-autoexec",
-          "--python-exit-code",
-          "1",
-          "--python",
-          script,
-          "--",
-          input,
-          staged,
-          ...sourceArgs,
-        ],
-        env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
+      child = blenderCommand(script, [input, staged, ...sourceArgs], {
         stdin: "null",
         stdout: "piped",
         stderr: "piped",
@@ -58,7 +84,7 @@ export async function exportBlend(
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) {
         throw new Error(
-          `Blender executable not found: ${executable}. Install Blender and put it on PATH, or set JS3_BLENDER to its executable path.`,
+          `Blender executable not found: ${blenderExecutable()}. Install Blender and put it on PATH, or set JS3_BLENDER to its executable path.`,
         );
       }
       throw error;

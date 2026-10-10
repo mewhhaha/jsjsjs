@@ -35,12 +35,6 @@ Deno.test("emitted model types are complete and movable, with strict diagnostics
     assert(report.dependencies["fflate"]);
     const bundle = join(project, ".js3");
     await Deno.rename(generated, bundle);
-    // An old declaration bundle beside the new one must not become model input.
-    await Deno.mkdir(join(project, ".threejs"));
-    await Deno.writeTextFile(
-      join(project, ".threejs/stale.d.ts"),
-      "type Stale = MissingDependency;\n",
-    );
     await Deno.writeTextFile(
       join(project, "tsconfig.json"),
       JSON.stringify({
@@ -54,7 +48,7 @@ Deno.test("emitted model types are complete and movable, with strict diagnostics
 import { box, group, material, stairs, ramp, arch, wall, column, gableRoof, basin, bottle, dome, pipe, frame, beamBetween, railing, shelving, union, offsetProfile, bevel } from "js3";
 import type { BasinOptions, SolidOptions, RailingOptions } from "js3";
 import { fur, grass, hair, groom, sampleRoots, strands, hairMaterial, hairCards, hairLock } from "js3";
-import type { StrandData, HairOptions, StrandGuide, HairCardGuide, HairLockOptions, HairLockPoint } from "js3";
+import type { StrandData, HairOptions, StrandGuide, HairCardGuide, HairLockOptions, XYZ } from "js3";
 import { createGroom, serializeGroom, parseGroom, generateGroomStrands, bakeGroomCards, compileGroom, renderGroom, buildGroom, buildGroomLODs, groomHairMaterial } from "js3";
 import type { GuideGroom, GroomFiber, BakedGroomCards, GroomBuildOptions, GroomHairMaterialOptions } from "js3";
 import { voxelizeGroom, buildDirectionalGroomShadow, buildAmbientGroomVisibility, GroomVolumeShadows, registerGroomVolume } from "js3";
@@ -68,12 +62,6 @@ import * as addons from "three/addons";
 import { WebGPURenderer } from "three/webgpu";
 import { uniform } from "three/tsl";
 import type { ModelInspection, ImposterOptions, ImposterManifest, ViewerAPI } from "js3/api";
-import { box as legacyBox } from "threejs";
-import { roundedBox as legacyRoundedBox } from "threejs/prelude";
-import type { ViewerAPI as LegacyViewerAPI } from "threejs/api";
-const compatibleBox: typeof box = legacyBox;
-const compatibleRoundedBox: typeof roundedBox = legacyRoundedBox;
-const compatibleAPI = (api: LegacyViewerAPI): ViewerAPI => api;
 const imposterOptions: ImposterOptions = { coverage: 360, grid: 5, tileSize: 128 };
 async function capture(api: ViewerAPI): Promise<ImposterManifest> {
   return (await api.captureImposter(imposterOptions)).manifest;
@@ -113,7 +101,7 @@ const fibers: StrandData = groom(sampleRoots(emitter, { count: 8 }), options.gro
 authored.add(hair(emitter, options), fur(emitter, options), grass(emitter, options), strands(fibers));
 const cards: HairCardGuide[] = [{ points: [[0,1,0],[.1,.8,0],[.15,.5,0]], width: [.04,.05,.01] }];
 authored.add(hairCards(cards, { seed: 2, color: "#352018", roughness: .5 }));
-const lockPath: readonly HairLockPoint[] = [[0,1,0],[.2,.9,.1],[.3,.5,.15]];
+const lockPath: readonly XYZ[] = [[0,1,0],[.2,.9,.1],[.3,.5,.15]];
 const lockOptions: HairLockOptions = { width:.2, thickness:.05, widthProfile:[.6,1,.7,0], normal:[0,0,1], twist:15, ridge:.3, color:"#542c18" };
 authored.add(hairLock(lockPath, lockOptions));
 const editable: GuideGroom = parseGroom(serializeGroom(createGroom({version:1, seed:4, layers:[{id:"coat", kind:"undercoat", children:12, radius:.001, depth:.4}], guides:[{id:"crown", layer:"coat", points:[[0,0,0],[0,1,0]], width:.05}]})));
@@ -158,7 +146,6 @@ export default () => authored;
       bundle,
     );
     assert(direct.fileNames.includes(join(project, "model.ts")));
-    assert(!direct.fileNames.includes(join(project, ".threejs/stale.d.ts")));
     assertEquals(
       ts.getPreEmitDiagnostics(
         ts.createProgram(direct.fileNames, direct.options),
@@ -193,9 +180,6 @@ Deno.test("type emission protects user files and replaces owned bundles only wit
     const first = await emitTypes(target);
     await assertRejects(() => emitTypes(target), Error, "not empty");
     const manifestPath = join(target, "manifest.json");
-    const legacyManifest = JSON.parse(await Deno.readTextFile(manifestPath));
-    legacyManifest.format = "threejs-types";
-    await Deno.writeTextFile(manifestPath, JSON.stringify(legacyManifest));
     const second = await emitTypes(target, { force: true });
     assertEquals(
       JSON.parse(await Deno.readTextFile(manifestPath)).format,

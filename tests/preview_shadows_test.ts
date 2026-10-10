@@ -1,18 +1,15 @@
 import { assert, assertAlmostEquals, assertEquals } from "@std/assert";
-import * as esbuild from "esbuild";
 import type * as THREE from "three";
-import { startServer } from "../src/server.ts";
-import { launchViewer, waitForModel } from "../src/browser.ts";
+import { waitForModel } from "../src/browser.ts";
+import { chromiumAvailable, withViewer } from "./support.ts";
 
 Deno.test({
   name:
     "preview shadows follow translated models and reset after a live rebuild",
+  ignore: !chromiumAvailable,
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
-    const directory = await Deno.makeTempDir({ prefix: "js3-shadows-" });
-    let server: Awaited<ReturnType<typeof startServer>> | undefined;
-    let viewer: Awaited<ReturnType<typeof launchViewer>> | undefined;
     const source = (shadows?: boolean) => `
 import { THREE, box, group, hairCards } from "js3";
 export default () => {
@@ -40,18 +37,9 @@ export default () => {
   Object.assign(window,{shadowTestRoot:root});
   return root;
 };`;
-    try {
-      const file = `${directory}/model.ts`;
-      await Deno.writeTextFile(file, source());
-      server = await startServer(file, 0);
-      viewer = await launchViewer(server.url, {
-        renderer: "software",
-        width: 320,
-        height: 320,
-      });
-      await waitForModel(viewer.page);
+    await withViewer(source(), async ({ page, file }) => {
       const capture = () =>
-        viewer!.page.evaluate(() => {
+        page.evaluate(() => {
           window.modelViewer.render();
           const canvas = document.querySelector("canvas")!;
           const gl = canvas.getContext("webgl2")!;
@@ -98,13 +86,13 @@ export default () => {
       assertEquals(before.hasMap, false);
       const rebuild = async (shadows: boolean) => {
         await Deno.writeTextFile(file, source(shadows));
-        await viewer!.page.waitForFunction((enabled) => {
+        await page.waitForFunction((enabled) => {
           const root = (window as unknown as { shadowTestRoot: THREE.Object3D })
             .shadowTestRoot;
           return window.modelViewer.ready &&
             root.userData.preview?.lighting?.shadows === enabled;
         }, shadows);
-        await waitForModel(viewer!.page);
+        await waitForModel(page);
       };
       await rebuild(true);
       const on = await capture();
@@ -160,11 +148,6 @@ export default () => {
         resetDifference / before.pixels.length < .01,
         "Disabling shadows must restore the original lighting",
       );
-    } finally {
-      await viewer?.browser.close();
-      await server?.close();
-      esbuild.stop();
-      await Deno.remove(directory, { recursive: true });
-    }
+    }, { width: 320, height: 320 });
   },
 });

@@ -7,19 +7,49 @@ spring motion into clips to make them portable.
 
 ## Try it
 
-```sh
-js3 open examples/rigging.ts
-js3 inspect examples/rigging.ts --json
-js3 screenshot examples/rigging.ts output/wave.png --clip Wave --time 1.4
-js3 frames examples/rigging.ts output/wave --clip Wave --fps 24
-js3 build examples/rigging.ts output/rigging --clip Wave --time 1.4 --json
-js3 export examples/rigging.ts output/rigging.blend
-js3 types --force
+Save this as `output/arm.ts`. It builds a two-bone arm, skins a subdivided
+cylinder to it with blended weights at the elbow, and registers a `Wave` clip:
+
+```ts
+import { bindSkin, clip, cylinder, material, rig } from "js3";
+
+export default function buildModel() {
+  const arm = rig([
+    { name: "Upper" },
+    { name: "Lower", parent: "Upper", position: [0, 1, 0] },
+  ], { name: "arm" });
+  bindSkin(
+    cylinder(0.1, 2, {
+      name: "sleeve",
+      heightSegments: 16,
+      position: [0, 1, 0],
+      material: material("#527d82"),
+    }),
+    arm,
+    {
+      weights: ({ position }) => {
+        const lower = Math.max(0, Math.min(1, (position[1] - 0.8) / 0.4));
+        return { Upper: 1 - lower, Lower: lower };
+      },
+    },
+  );
+  clip(arm, "Wave", [{
+    target: "Lower",
+    property: "rotation",
+    keys: [[0, [0, 0, 0]], [1, [0, 0, 90]], [2, [0, 0, 0]]],
+  }]);
+  return arm;
+}
 ```
 
-The example has `Wave`, `Reach_IK`, and `Hair_sway` clips: a humanoid skeleton,
-blended sleeve weights, blinking morphs, a handheld prop, and a skinned cartoon
-ponytail driven by spring bones.
+```sh
+js3 open output/arm.ts
+js3 inspect output/arm.ts --json
+js3 screenshot output/arm.ts output/arm-wave.png --clip Wave --time 1
+js3 frames output/arm.ts output/arm-wave --clip Wave --fps 24
+js3 build output/arm.ts output/arm --clip Wave --time 1 --json
+js3 export output/arm.ts output/arm.blend
+```
 
 The viewer shows clip selection, play/pause, a time slider, speed, and a loop
 checkbox when the model has animations. It starts in **Authored pose** and
@@ -183,11 +213,11 @@ sampler and restores the original transforms and morph weights.
 For an application loop, use `new AnimationPlayer(root)`, then
 `play(name?, {loop?, speed?})`, `update(deltaSeconds)`, `pause()`,
 `seek(seconds, name?, {loop?})`, `reset()`, and `dispose()`. Its `state`
-contains clips, time, duration, playing, loop, and speed. Speed must be
-positive. It reads no wall clock. Use one controller per model; do not run
-independent mixers and the convenience sampler on the same objects. Native
-AnimationMixer and AnimationAction remain available for layering, crossfades,
-and additive blending.
+contains clips, the selected clip, time, duration, playing, loop, and speed.
+Speed must be positive. It reads no wall clock. Use one controller per model; do
+not run independent mixers and the convenience sampler on the same objects.
+Native AnimationMixer and AnimationAction remain available for layering,
+crossfades, and additive blending.
 
 The browser API has `animationState()`, `playAnimation(name?, options?)`,
 `pauseAnimation()`, `sampleAnimation(name, seconds, options?)`, and

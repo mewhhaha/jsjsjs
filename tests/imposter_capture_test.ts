@@ -1,19 +1,14 @@
 import { assert, assertEquals } from "@std/assert";
-import * as esbuild from "esbuild";
-import { startServer } from "../src/server.ts";
-import { launchViewer, waitForModel } from "../src/browser.ts";
+import { chromiumAvailable, withViewer } from "./support.ts";
 
 Deno.test({
   name:
     "imposter captures transparent lit 180/360 atlases without changing the viewer",
+  ignore: !chromiumAvailable,
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
-    const directory = await Deno.makeTempDir({ prefix: "js3-imposter-" });
-    let server: Awaited<ReturnType<typeof startServer>> | undefined;
-    let viewer: Awaited<ReturnType<typeof launchViewer>> | undefined;
-    try {
-      const source = `import * as THREE from "three";
+    const source = `import * as THREE from "three";
 export default function () {
   const red = new THREE.MeshStandardMaterial({ color: 0xff0000 });
   const green = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
@@ -25,12 +20,8 @@ export default function () {
   model.add(box);
   return model;
 }`;
-      const file = `${directory}/model.ts`;
-      await Deno.writeTextFile(file, source);
-      server = await startServer(file, 0);
-      viewer = await launchViewer(server.url, { renderer: "software" });
-      await waitForModel(viewer.page);
-      const before = await viewer.page.evaluate(() => {
+    await withViewer(source, async ({ page }) => {
+      const before = await page.evaluate(() => {
         window.modelViewer.setView("left");
         window.modelViewer.render();
         return {
@@ -39,7 +30,7 @@ export default function () {
         };
       });
       for (const coverage of [180, 360] as const) {
-        const capture = await viewer.page.evaluate(async (coverage) => {
+        const capture = await page.evaluate(async (coverage) => {
           const result = await window.modelViewer.captureImposter({
             coverage,
             grid: 3,
@@ -121,7 +112,7 @@ export default function () {
           coverage === 360,
         );
       }
-      const after = await viewer.page.evaluate(() => {
+      const after = await page.evaluate(() => {
         window.modelViewer.render();
         return {
           inspection: window.modelViewer.inspect(),
@@ -133,11 +124,6 @@ export default function () {
         before,
         "capture preserves the model, camera, background, and grid",
       );
-    } finally {
-      await viewer?.browser.close();
-      await server?.close();
-      esbuild.stop();
-      await Deno.remove(directory, { recursive: true });
-    }
+    });
   },
 });

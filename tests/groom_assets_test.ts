@@ -1,8 +1,7 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import * as THREE from "three";
-import * as esbuild from "esbuild";
 import { inflateSync } from "node:zlib";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   collectGroomAssets,
@@ -11,17 +10,22 @@ import {
   GROOM_ASSET_FILES,
   groomAssetManifest,
   registerGroomAssets,
-} from "../src/groom-assets.ts";
-import { bakeGroomCards } from "../src/groom-cards.ts";
+} from "../src/hair/groom-assets.ts";
+import { bakeGroomCards } from "../src/hair/groom-cards.ts";
 import {
   generateGroomStrands,
   type GuideGroom,
   parseGroom,
-} from "../src/groom-data.ts";
-import { buildGroom, buildGroomLODs } from "../src/groom.ts";
-import { startServer } from "../src/server.ts";
-import { launchViewer, waitForModel } from "../src/browser.ts";
-import { writeGroomOutputs } from "../main.ts";
+} from "../src/hair/groom-data.ts";
+import { buildGroom, buildGroomLODs } from "../src/hair/groom.ts";
+import { receiveGrooms } from "../src/cli/output.ts";
+import { chromiumAvailable, withViewer } from "./support.ts";
+
+declare global {
+  interface Window {
+    resumeUpload?: () => void;
+  }
+}
 
 function source(): GuideGroom {
   return {
@@ -216,223 +220,252 @@ Deno.test("cloned and copied groom roots recover assets from shared geometry at 
   });
 });
 
-Deno.test("CLI build exports editable groom and every map headlessly alongside the GLB", async () => {
-  const directory = await Deno.makeTempDir({ prefix: "threejs-groom-assets-" });
-  const project = dirname(
-    fileURLToPath(new URL("../main.ts", import.meta.url)),
-  );
-  try {
-    const file = join(directory, "model.ts");
-    await Deno.writeTextFile(
-      file,
-      `import {buildGroomLODs} from "js3";
-export default () => buildGroomLODs(${
-        JSON.stringify(source())
-      },{segments:8,atlas:{textureSize:128,tileWidth:16,tileHeight:32},shading:"standard"}).clone();`,
-    );
-    const command = new Deno.Command(Deno.execPath(), {
-      args: [
-        "run",
-        "-A",
-        "main.ts",
-        "build",
-        file,
-        join(directory, "out"),
-        "--software",
-        "--json",
-        "--width",
-        "96",
-        "--height",
-        "96",
-        "--timeout",
-        "60000",
-      ],
-      cwd: project,
-      env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
-      stdout: "piped",
-      stderr: "piped",
-    }).spawn();
-    const timeout = setTimeout(() => {
-      try {
-        command.kill("SIGKILL");
-      } catch { /* already done */ }
-    }, 70_000);
-    let result;
-    try {
-      result = await command.output();
-    } finally {
-      clearTimeout(timeout);
-    }
-    const decoder = new TextDecoder();
-    assertEquals(result.code, 0, decoder.decode(result.stderr));
-    const report = JSON.parse(decoder.decode(result.stdout));
-    assertEquals(report.ok, true);
-    assertEquals(report.headless, true);
-    assertEquals(report.outputs.grooms.length, 1);
-    const groom = report.outputs.grooms[0];
-    assertEquals(
-      parseGroom(await Deno.readTextFile(groom.files.source)),
-      source(),
-    );
-    const manifest = JSON.parse(await Deno.readTextFile(groom.files.manifest));
-    assertEquals(manifest.tiles.length, 1);
-    assertEquals(manifest.cards[0].sourceGuideId, "coat-01");
-    assertEquals(manifest.tiles[0].fiberCount, 12);
-    const expected = baked().atlas;
-    for (
-      const [key, pixels] of [
-        ["coverage", expected.data],
-        ["normal", expected.normalData],
-        ["tangent", expected.tangentData],
-        ["depth", expected.depthData],
-        ["attributes", expected.attributeData],
-      ] as const
-    ) {
-      const png = decodePNG(await Deno.readFile(groom.files[key]));
-      assertEquals(png.pixels, pixels);
-    }
-    assertEquals(
-      JSON.parse(await Deno.readTextFile(report.outputs.report)),
-      report,
-    );
-  } finally {
-    await Deno.remove(directory, { recursive: true });
-  }
-});
-
 Deno.test({
   name:
-    "groom transfers bound files and preserve existing outputs after incomplete data or unsafe paths",
-  sanitizeOps: false,
-  sanitizeResources: false,
+    "CLI build exports editable groom and every map headlessly alongside the GLB",
+  ignore: !chromiumAvailable,
   async fn() {
     const directory = await Deno.makeTempDir({
-      prefix: "js3-groom-transfer-",
+      prefix: "threejs-groom-assets-",
     });
-    let server: Awaited<ReturnType<typeof startServer>> | undefined;
-    let viewer: Awaited<ReturnType<typeof launchViewer>> | undefined;
+    const project = dirname(
+      fileURLToPath(new URL("../main.ts", import.meta.url)),
+    );
     try {
       const file = join(directory, "model.ts");
       await Deno.writeTextFile(
         file,
-        `import {buildGroom} from "js3";
-export default () => buildGroom(${
+        `import {buildGroomLODs} from "js3";
+export default () => buildGroomLODs(${
           JSON.stringify(source())
-        },{segments:8,atlas:{textureSize:128,tileWidth:16,tileHeight:32},shading:"standard"});`,
+        },{segments:8,atlas:{textureSize:128,tileWidth:16,tileHeight:32},shading:"standard"}).clone();`,
       );
-      server = await startServer(file, 0);
-      viewer = await launchViewer(server.url, {
-        renderer: "software",
-        width: 96,
-        height: 96,
-      });
-      await waitForModel(viewer.page);
-      const page = viewer.page;
-      const transfer = await page.evaluate(() =>
-        window.modelViewer.beginGroomExport()
-      );
-      assertEquals(transfer.grooms.length, 1);
-      assertEquals(transfer.files.length, 7);
-      await assertRejects(
-        () => page.evaluate(() => window.modelViewer.beginGroomExport()),
-        Error,
-        "already active",
-      );
-      const prepared = await page.evaluate(
-        (id) => window.modelViewer.prepareGroomExportFile(id, 0),
-        transfer.id,
-      );
-      assert(prepared.chunkSize <= 8 * 1024 * 1024);
+      const command = new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "-A",
+          "main.ts",
+          "build",
+          file,
+          join(directory, "out"),
+          "--software",
+          "--json",
+          "--width",
+          "96",
+          "--height",
+          "96",
+          "--timeout",
+          "60000",
+        ],
+        cwd: project,
+        env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
+        stdout: "piped",
+        stderr: "piped",
+      }).spawn();
+      const timeout = setTimeout(() => {
+        try {
+          command.kill("SIGKILL");
+        } catch { /* already done */ }
+      }, 70_000);
+      let result;
+      try {
+        result = await command.output();
+      } finally {
+        clearTimeout(timeout);
+      }
+      const decoder = new TextDecoder();
+      assertEquals(result.code, 0, decoder.decode(result.stderr));
+      const report = JSON.parse(decoder.decode(result.stdout));
+      assertEquals(report.ok, true);
+      assertEquals(report.headless, true);
+      assertEquals(report.outputs.grooms.length, 1);
+      const groom = report.outputs.grooms[0];
       assertEquals(
-        prepared.chunks,
-        Math.ceil(prepared.byteLength / prepared.chunkSize),
+        parseGroom(await Deno.readTextFile(groom.files.source)),
+        source(),
       );
-      await assertRejects(
-        () =>
-          page.evaluate(
-            ({ id, count }) =>
-              window.modelViewer.readGroomExportChunk(id, 0, count),
-            {
-              id: transfer.id,
-              count: prepared.chunks,
-            },
-          ),
-        Error,
-        "out of range",
+      const manifest = JSON.parse(
+        await Deno.readTextFile(groom.files.manifest),
       );
-      await page.evaluate(
-        (id) => window.modelViewer.endGroomExport(id),
-        transfer.id,
-      );
-      await assertRejects(
-        () =>
-          page.evaluate(
-            (id) => window.modelViewer.readGroomExportChunk(id, 0, 0),
-            transfer.id,
-          ),
-        Error,
-        "expired",
-      );
-      const out = join(directory, "out");
-      const groups = await writeGroomOutputs(
-        page,
-        out,
-        new AbortController().signal,
-      );
-      const original = await Deno.readFile(groups[0].files.source);
-      const read = await page.evaluateHandle(() =>
-        window.modelViewer.readGroomExportChunk
-      );
-      try {
-        await page.evaluate(() => {
-          window.modelViewer.readGroomExportChunk = () => "";
-        });
-        await assertRejects(
-          () => writeGroomOutputs(page, out, new AbortController().signal),
-          Error,
-          "empty or incomplete",
-        );
-        assertEquals(await Deno.readFile(groups[0].files.source), original);
-      } finally {
-        await page.evaluate((saved) => {
-          window.modelViewer.readGroomExportChunk = saved;
-        }, read);
-        await read.dispose();
+      assertEquals(manifest.tiles.length, 1);
+      assertEquals(manifest.cards[0].sourceGuideId, "coat-01");
+      assertEquals(manifest.tiles[0].fiberCount, 12);
+      const expected = baked().atlas;
+      for (
+        const [key, pixels] of [
+          ["coverage", expected.data],
+          ["normal", expected.normalData],
+          ["tangent", expected.tangentData],
+          ["depth", expected.depthData],
+          ["attributes", expected.attributeData],
+        ] as const
+      ) {
+        const png = decodePNG(await Deno.readFile(groom.files[key]));
+        assertEquals(png.pixels, pixels);
       }
-      const begin = await page.evaluateHandle(() =>
-        window.modelViewer.beginGroomExport
+      assertEquals(
+        JSON.parse(await Deno.readTextFile(report.outputs.report)),
+        report,
       );
-      try {
-        await page.evaluate(() => {
-          const saved = window.modelViewer.beginGroomExport;
-          window.modelViewer.beginGroomExport = () => {
-            const transfer = saved();
-            transfer.grooms[0].directory = "../outside";
-            return transfer;
-          };
-        });
-        await assertRejects(
-          () => writeGroomOutputs(page, out, new AbortController().signal),
-          Error,
-          "invalid groom output paths",
-        );
-        assertEquals(await Deno.readFile(groups[0].files.source), original);
-      } finally {
-        await page.evaluate((saved) => {
-          window.modelViewer.beginGroomExport = saved;
-        }, begin);
-        await begin.dispose();
-      }
-      const leftovers: string[] = [];
-      for await (const entry of Deno.readDir(groups[0].directory)) {
-        if (entry.name.startsWith(".js3-")) leftovers.push(entry.name);
-      }
-      assertEquals(leftovers, []);
     } finally {
-      await viewer?.browser.close();
-      await server?.close();
-      esbuild.stop();
       await Deno.remove(directory, { recursive: true });
     }
+  },
+});
+
+Deno.test({
+  name:
+    "groom uploads write every file and reject unsafe paths, bad headers, and model changes",
+  ignore: !chromiumAvailable,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn(t) {
+    const model = `import {buildGroom} from "js3";
+export default () => buildGroom(${
+      JSON.stringify(source())
+    },{segments:8,atlas:{textureSize:128,tileWidth:16,tileHeight:32},shading:"standard"});`;
+    await withViewer(model, async ({ page, server, dir, file }) => {
+      const out = join(dir, "out");
+      const signal = new AbortController().signal;
+      const groups = await receiveGrooms(server, page, out, signal);
+      assertEquals(groups.length, 1);
+      const groom = join(out, "grooms/001-a-coat-preview");
+      assertEquals(groups[0].directory, groom);
+      assertEquals(
+        Object.values(groups[0].files),
+        GROOM_ASSET_FILES.map((name) => join(groom, name)),
+      );
+      for (const path of Object.values(groups[0].files)) {
+        assert((await Deno.stat(path)).size > 8);
+      }
+      const original = await Deno.readFile(groups[0].files.source);
+      const unchanged = async () => {
+        assertEquals(await Deno.readFile(groups[0].files.source), original);
+        const leftovers: string[] = [];
+        for (const folder of [out, groom]) {
+          for await (const entry of Deno.readDir(folder)) {
+            if (entry.name.startsWith(".js3-")) leftovers.push(entry.name);
+          }
+        }
+        assertEquals(leftovers, []);
+      };
+      const uploadGrooms = await page.evaluateHandle(() =>
+        window.modelViewer.uploadGrooms
+      );
+      const valid = {
+        ...groups[0],
+        directory: relative(out, groups[0].directory),
+        files: Object.fromEntries(
+          Object.entries(groups[0].files).map((
+            [key, path],
+          ) => [key, relative(out, path)]),
+        ),
+      };
+      for (
+        const [name, uploads, metadata, message] of [
+          [
+            "path traversal",
+            [["grooms/../../outside/groom.json", "{}"]],
+            [],
+            "Unsafe or duplicate groom upload path",
+          ],
+          [
+            "unexpected file",
+            [["grooms/001-a-coat-preview/extra.json", "{}"]],
+            [],
+            "Unsafe or duplicate groom upload path",
+          ],
+          [
+            "duplicate path",
+            [["grooms/002-b/groom.json", "{}"], [
+              "grooms/002-b/groom.json",
+              "{}",
+            ]],
+            [],
+            "Unsafe or duplicate groom upload path",
+          ],
+          [
+            "bad PNG header",
+            [["grooms/001-a-coat-preview/coverage.png", "{}"]],
+            [],
+            "invalid header",
+          ],
+          [
+            "bad JSON header",
+            [["grooms/001-a-coat-preview/groom.json", "[]"]],
+            [],
+            "invalid header",
+          ],
+          [
+            "unsafe metadata",
+            [],
+            [{ ...valid, directory: "../outside" }],
+            "invalid groom output paths",
+          ],
+          [
+            "metadata without uploads",
+            [],
+            [valid],
+            "do not match its metadata",
+          ],
+        ] as const
+      ) {
+        await t.step(`${name} is rejected`, async () => {
+          await page.evaluate(({ uploads, metadata }) => {
+            window.modelViewer.uploadGrooms = async (url) => {
+              for (const [path, body] of uploads) {
+                const target = new URL(url);
+                target.searchParams.set("path", path);
+                const response = await fetch(target, { method: "POST", body });
+                if (!response.ok) throw new Error(await response.text());
+              }
+              return metadata as never;
+            };
+          }, { uploads, metadata });
+          try {
+            await assertRejects(
+              () => receiveGrooms(server, page, out, signal),
+              Error,
+              message,
+            );
+          } finally {
+            await page.evaluate((upload) => {
+              window.modelViewer.uploadGrooms = upload;
+            }, uploadGrooms);
+          }
+          await unchanged();
+        });
+      }
+      await uploadGrooms.dispose();
+      await t.step("a rebuild between files fails the export", async () => {
+        await page.evaluate(() => {
+          const send = globalThis.fetch;
+          globalThis.fetch = async (...args) => {
+            globalThis.fetch = send;
+            const response = await send(...args);
+            await new Promise<void>((resolve) => {
+              window.resumeUpload = resolve;
+            });
+            return response;
+          };
+        });
+        const revision = await page.evaluate(() => window.modelViewer.revision);
+        const pending = receiveGrooms(server, page, out, signal);
+        await page.waitForFunction(() => !!window.resumeUpload);
+        await Deno.writeTextFile(file, model + "\n// rebuild");
+        await page.waitForFunction(
+          (previous) =>
+            window.modelViewer.ready && window.modelViewer.revision > previous,
+          revision,
+        );
+        await page.evaluate(() => window.resumeUpload!());
+        await assertRejects(
+          () => pending,
+          Error,
+          "Model changed during groom export",
+        );
+        await unchanged();
+      });
+    }, { width: 96, height: 96 });
   },
 });

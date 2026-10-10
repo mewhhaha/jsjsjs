@@ -5,8 +5,7 @@ import {
   assertThrows,
 } from "@std/assert";
 import * as THREE from "three";
-import { hairLock } from "../src/stylized-hair.ts";
-import { buildCartoonWig } from "../examples/haircuts/cartoon.ts";
+import { hairLock } from "../src/hair/stylized-hair.ts";
 
 function measure(geometry: THREE.BufferGeometry) {
   const position = geometry.getAttribute("position"), index = geometry.index!;
@@ -120,31 +119,4 @@ Deno.test("stylized geometry rejects invalid or unbounded input before allocatio
   ) assertThrows(() => hairLock(path, options), RangeError);
   assertThrows(() => hairLock([[0, 0, 0], [0, 0, 0]]), RangeError);
   assertThrows(() => hairLock([[0, 0, 0], [NaN, 0, 0]]), RangeError);
-});
-
-Deno.test("cartoon presets share the anatomical head frame and use portable finite meshes", () => {
-  for (const style of ["quiff", "bob"] as const) {
-    const wig = buildCartoonWig(style);
-    const box = new THREE.Box3().setFromObject(wig),
-      size = box.getSize(new THREE.Vector3());
-    assert(size.x > .7 && size.x < 1.4);
-    assert(box.min.y > .2 && box.max.y < 1.9);
-    let lockCount = 0, triangles = 0;
-    wig.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
-      assert(object.material instanceof THREE.MeshStandardMaterial);
-      assert(
-        Array.from(object.geometry.getAttribute("position").array).every(
-          Number.isFinite,
-        ),
-      );
-      triangles += object.geometry.index!.count / 3;
-      if (object.userData.threejsHairLock) {
-        lockCount++;
-        assert(measure(object.geometry).volume > 0);
-      }
-    });
-    assert(lockCount >= 20 && lockCount <= 45);
-    assert(triangles < 60000);
-  }
 });

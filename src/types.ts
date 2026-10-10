@@ -69,7 +69,7 @@ async function checkDestination(directory: string, force: boolean) {
     );
   }
   if (
-    ![format, "threejs-types"].includes(manifest.format) ||
+    manifest.format !== format ||
     manifest.version !== 1 ||
     !Array.isArray(manifest.files) ||
     files.some((file) =>
@@ -179,9 +179,6 @@ function compilerConfig() {
         "js3": ["./src/prelude.d.ts"],
         "js3/prelude": ["./src/prelude.d.ts"],
         "js3/api": ["./web/api.d.ts"],
-        "threejs": ["./src/prelude.d.ts"],
-        "threejs/prelude": ["./src/prelude.d.ts"],
-        "threejs/api": ["./web/api.d.ts"],
         "three": [`${three}/index.d.ts`],
         "three/addons": [`${three}/examples/jsm/Addons.d.ts`],
         "three/addons/*": [`${three}/examples/jsm/*`],
@@ -199,7 +196,6 @@ function compilerConfig() {
       "../**/node_modules/**",
       "../**/.git/**",
       "../**/.js3/**",
-      "../**/.threejs/**",
     ],
   };
 }

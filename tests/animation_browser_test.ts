@@ -1,7 +1,5 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import * as esbuild from "esbuild";
-import { startServer } from "../src/server.ts";
-import { launchViewer, waitForModel } from "../src/browser.ts";
+import { chromiumAvailable, withViewer } from "./support.ts";
 
 const source =
   `import { rig, boneChain, bindSkin, box, clip, THREE, sampleAnimation } from "js3";
@@ -39,23 +37,11 @@ export async function readGLB(encoded) {
 Deno.test({
   name:
     "viewer scrubs, plays, resets after reload, and exports animated skins and morphs headlessly",
+  ignore: !chromiumAvailable,
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
-    const directory = await Deno.makeTempDir({ prefix: "js3-animation-" });
-    const file = `${directory}/model.ts`;
-    let server: Awaited<ReturnType<typeof startServer>> | undefined;
-    let viewer: Awaited<ReturnType<typeof launchViewer>> | undefined;
-    try {
-      await Deno.writeTextFile(file, source);
-      server = await startServer(file, 0);
-      viewer = await launchViewer(server.url, {
-        renderer: "software",
-        width: 480,
-        height: 480,
-      });
-      const { page } = viewer;
-      await waitForModel(page);
+    await withViewer(source, async ({ page, file }) => {
       assert(await page.locator("#animation").isVisible());
       assertEquals(
         (await page.evaluate(() => window.modelViewer.inspect())).animations,
@@ -158,11 +144,6 @@ Deno.test({
       assertEquals(reloaded.clip, null);
       assertEquals(reloaded.clips[0].name, "New_clip");
       assertEquals(await page.evaluate(() => window.modelViewer.error), null);
-    } finally {
-      await viewer?.browser.close();
-      await server?.close();
-      esbuild.stop();
-      await Deno.remove(directory, { recursive: true });
-    }
+    }, { width: 480, height: 480 });
   },
 });

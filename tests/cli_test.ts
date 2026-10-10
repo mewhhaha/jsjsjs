@@ -1,7 +1,8 @@
 import { assert, assertEquals, assertMatch, assertThrows } from "@std/assert";
-import { parseArgs } from "../main.ts";
+import { commands, guideDocs, help, parseArgs } from "../src/cli/args.ts";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { chromiumAvailable } from "./support.ts";
 
 const projectRoot = dirname(
   fileURLToPath(new URL("../main.ts", import.meta.url)),
@@ -42,79 +43,159 @@ Deno.test("animation CLI validates clip selection, frame rates, and capture wind
   assertThrows(() => parseArgs(["export", "model.ts", "--clip", "walk"]));
 });
 
-Deno.test("CLI captures deterministic animation PNGs and timestamp manifest without a desktop", async () => {
-  const directory = await Deno.makeTempDir({ prefix: "js3 frames " });
-  try {
-    const file = join(directory, "model.ts");
-    await Deno.writeTextFile(
-      file,
-      `import {box,group,clip} from "js3";
+Deno.test("--view is rejected where no batch capture uses it", () => {
+  for (const command of ["init", "open", "headless", "serve"]) {
+    assertThrows(
+      () => parseArgs([command, "model.ts", "--view", "front"]),
+      Error,
+      "--view is only supported by inspect, build, screenshot, frames, export.",
+    );
+  }
+  for (
+    const command of ["inspect", "build", "screenshot", "frames", "export"]
+  ) {
+    const clip = command === "frames" ? ["--clip", "walk"] : [];
+    const args = parseArgs([command, "model.ts", "--view", "front", ...clip]);
+    assert(args && "view" in args);
+    assertEquals(args.view, "front");
+  }
+});
+
+Deno.test("help, guide, and justfile are generated from or match the command table", async () => {
+  for (
+    const section of help.split("\n\n").filter((part) =>
+      /^(Commands|Options):/.test(part)
+    )
+  ) {
+    const starts = new Set(
+      section.split("\n").slice(1).map((row) => {
+        const match = /^ {2}\S.*? {2,}(\S.*)$/.exec(row);
+        assert(match, `Unaligned help row: ${row}`);
+        return row.length - match[1].length;
+      }),
+    );
+    assertEquals(starts.size, 1, section);
+  }
+  const docs = [];
+  for await (const entry of Deno.readDir(join(projectRoot, "docs"))) {
+    docs.push(`docs/${entry.name}`);
+  }
+  assertEquals(docs.sort(), [...guideDocs].sort());
+  const guide = await cli(["guide", "--json"]);
+  assertEquals(guide.code, 0, guide.stderr);
+  const text = JSON.parse(guide.stdout).guide as string;
+  assert(text.startsWith(help.trimEnd() + "\n\n# js3 guide"));
+  const justfile = await Deno.readTextFile(join(projectRoot, "justfile"));
+  const recipes = new Map(
+    [...justfile.matchAll(/^([a-z]+)(.*):$/gm)].map((
+      [, name, parameters],
+    ) => [name, parameters.trim()]),
+  );
+  for (const [name, spec] of Object.entries(commands)) {
+    assertEquals(
+      recipes.get(name),
+      [
+        ...spec.positionals.map((positional) =>
+          positional === "model" ? "file" : `${positional}="${spec.output}"`
+        ),
+        "*args",
+      ].join(" "),
+      `justfile recipe ${name}`,
+    );
+    recipes.delete(name);
+  }
+  assertEquals([...recipes.keys()].sort(), [
+    "check",
+    "default",
+    "install",
+    "setup",
+    "test",
+  ]);
+});
+
+Deno.test({
+  name:
+    "CLI captures deterministic animation PNGs and timestamp manifest without a desktop",
+  ignore: !chromiumAvailable,
+  async fn() {
+    const directory = await Deno.makeTempDir({ prefix: "js3 frames " });
+    try {
+      const file = join(directory, "model.ts");
+      await Deno.writeTextFile(
+        file,
+        `import {box,group,clip} from "js3";
 export default () => {
  const model=group([box([.4,1,.4],{name:"moving"}),box([.1,.1,.1],{position:[0,-1,0]})],{preview:{grid:false,radius:2}});
  clip(model,"turn",[{target:"moving",property:"rotation",keys:[[0,[0,0,0]],[1,[0,0,90]]]}]);
  return model;
 };`,
-    );
-    const result = await cli([
-      "frames",
-      file,
-      join(directory, "frames"),
-      "--clip",
-      "turn",
-      "--fps",
-      "4",
-      "--duration",
-      ".75",
-      "--software",
-      "--width",
-      "192",
-      "--height",
-      "192",
-      "--json",
-    ]);
-    assertEquals(result.code, 0, result.stderr);
-    const report = JSON.parse(result.stdout);
-    assertEquals(report.headless, true);
-    assertEquals(report.frames, 3);
-    const manifest = JSON.parse(
-      await Deno.readTextFile(report.outputs.manifest),
-    );
-    assertEquals(manifest.frames.map((frame: { time: number }) => frame.time), [
-      0,
-      .25,
-      .5,
-    ]);
-    const images = await Promise.all(
-      manifest.frames.map((frame: { file: string }) =>
-        Deno.readFile(join(report.outputs.directory, frame.file))
-      ),
-    );
-    assert(images[0].some((byte: number, i: number) => byte !== images[2][i]));
-    const frame = join(directory, "half.png");
-    const single = await cli([
-      "screenshot",
-      file,
-      frame,
-      "--clip",
-      "turn",
-      "--time",
-      ".5",
-      "--software",
-      "--width",
-      "192",
-      "--height",
-      "192",
-      "--json",
-    ]);
-    assertEquals(single.code, 0, single.stderr);
-    assertEquals(
-      await Deno.readFile(frame),
-      images[2],
-      "Frame capture and exact-time screenshots must match",
-    );
-  } finally {
-    await Deno.remove(directory, { recursive: true });
-  }
+      );
+      const result = await cli([
+        "frames",
+        file,
+        join(directory, "frames"),
+        "--clip",
+        "turn",
+        "--fps",
+        "4",
+        "--duration",
+        ".75",
+        "--software",
+        "--width",
+        "192",
+        "--height",
+        "192",
+        "--json",
+      ]);
+      assertEquals(result.code, 0, result.stderr);
+      const report = JSON.parse(result.stdout);
+      assertEquals(report.headless, true);
+      assertEquals(report.frames, 3);
+      const manifest = JSON.parse(
+        await Deno.readTextFile(report.outputs.manifest),
+      );
+      assertEquals(
+        manifest.frames.map((frame: { time: number }) => frame.time),
+        [
+          0,
+          .25,
+          .5,
+        ],
+      );
+      const images = await Promise.all(
+        manifest.frames.map((frame: { file: string }) =>
+          Deno.readFile(join(report.outputs.directory, frame.file))
+        ),
+      );
+      assert(
+        images[0].some((byte: number, i: number) => byte !== images[2][i]),
+      );
+      const frame = join(directory, "half.png");
+      const single = await cli([
+        "screenshot",
+        file,
+        frame,
+        "--clip",
+        "turn",
+        "--time",
+        ".5",
+        "--software",
+        "--width",
+        "192",
+        "--height",
+        "192",
+        "--json",
+      ]);
+      assertEquals(single.code, 0, single.stderr);
+      assertEquals(
+        await Deno.readFile(frame),
+        images[2],
+        "Frame capture and exact-time screenshots must match",
+      );
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  },
 });
 
 Deno.test("imposter validates sampling and atlas sizes before launching", () => {
@@ -154,59 +235,64 @@ Deno.test("imposter validates sampling and atlas sizes before launching", () => 
   );
 });
 
-Deno.test("CLI writes a transparent octahedral atlas and matching manifest headlessly", async () => {
-  const directory = await Deno.makeTempDir({ prefix: "js3 imposter " });
-  try {
-    const file = join(directory, "model.ts");
-    await Deno.writeTextFile(
-      file,
-      'import {box} from "js3"; export default () => box([1,2,3]);',
-    );
-    const result = await cli([
-      "imposter",
-      file,
-      join(directory, "bake"),
-      "--coverage",
-      "360",
-      "--grid",
-      "3",
-      "--tile-size",
-      "32",
-      "--software",
-      "--json",
-    ]);
-    assertEquals(result.code, 0, result.stderr);
-    const envelope = JSON.parse(result.stdout);
-    assertEquals(envelope.ok, true);
-    assertEquals(envelope.headless, true);
-    assertEquals(envelope.views, 9);
-    const manifest = JSON.parse(
-      await Deno.readTextFile(envelope.outputs.manifest),
-    );
-    assertEquals(manifest.tiles.length, 9);
-    assertEquals(manifest.options.coverage, 360);
-    assert(
-      manifest.tiles.some((tile: { direction: number[] }) =>
-        tile.direction[1] < -.99
-      ),
-    );
-    const png = await Deno.readFile(envelope.outputs.atlas);
-    assertEquals(Array.from(png.slice(0, 8)), [
-      137,
-      80,
-      78,
-      71,
-      13,
-      10,
-      26,
-      10,
-    ]);
-    const header = new DataView(png.buffer, png.byteOffset, png.byteLength);
-    assertEquals(header.getUint32(16), 96);
-    assertEquals(header.getUint32(20), 96);
-  } finally {
-    await Deno.remove(directory, { recursive: true });
-  }
+Deno.test({
+  name:
+    "CLI writes a transparent octahedral atlas and matching manifest headlessly",
+  ignore: !chromiumAvailable,
+  async fn() {
+    const directory = await Deno.makeTempDir({ prefix: "js3 imposter " });
+    try {
+      const file = join(directory, "model.ts");
+      await Deno.writeTextFile(
+        file,
+        'import {box} from "js3"; export default () => box([1,2,3]);',
+      );
+      const result = await cli([
+        "imposter",
+        file,
+        join(directory, "bake"),
+        "--coverage",
+        "360",
+        "--grid",
+        "3",
+        "--tile-size",
+        "32",
+        "--software",
+        "--json",
+      ]);
+      assertEquals(result.code, 0, result.stderr);
+      const envelope = JSON.parse(result.stdout);
+      assertEquals(envelope.ok, true);
+      assertEquals(envelope.headless, true);
+      assertEquals(envelope.views, 9);
+      const manifest = JSON.parse(
+        await Deno.readTextFile(envelope.outputs.manifest),
+      );
+      assertEquals(manifest.tiles.length, 9);
+      assertEquals(manifest.options.coverage, 360);
+      assert(
+        manifest.tiles.some((tile: { direction: number[] }) =>
+          tile.direction[1] < -.99
+        ),
+      );
+      const png = await Deno.readFile(envelope.outputs.atlas);
+      assertEquals(Array.from(png.slice(0, 8)), [
+        137,
+        80,
+        78,
+        71,
+        13,
+        10,
+        26,
+        10,
+      ]);
+      const header = new DataView(png.buffer, png.byteOffset, png.byteLength);
+      assertEquals(header.getUint32(16), 96);
+      assertEquals(header.getUint32(20), 96);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  },
 });
 
 async function cli(args: string[], deadlineMs = 90_000) {
@@ -239,97 +325,107 @@ async function cli(args: string[], deadlineMs = 90_000) {
   }
 }
 
-Deno.test("CLI creates a model and builds headless artifacts with JSON results", async (t) => {
-  const directory = await Deno.makeTempDir({ prefix: "model cli " });
-  const file = join(directory, "a model.ts");
-  const outputDirectory = join(directory, "build output");
-  try {
-    await t.step(
-      "init creates a usable starter and refuses overwrite",
-      async () => {
-        const result = await cli(["init", file, "--json"]);
-        assertEquals(result.code, 0, result.stderr);
-        const envelope = JSON.parse(result.stdout);
-        assertEquals(envelope.ok, true);
-        assertEquals(envelope.command, "init");
-        assertEquals(envelope.file, file);
-        const original = await Deno.readTextFile(file);
-        assertMatch(original, /export default/);
-        const repeated = await cli(["init", file, "--json"]);
-        assert(repeated.code !== 0);
-        assertEquals(JSON.parse(repeated.stdout).ok, false);
-        assertEquals(await Deno.readTextFile(file), original);
-      },
-    );
+Deno.test({
+  name: "CLI creates a model and builds headless artifacts with JSON results",
+  ignore: !chromiumAvailable,
+  async fn(t) {
+    const directory = await Deno.makeTempDir({ prefix: "model cli " });
+    const file = join(directory, "a model.ts");
+    const outputDirectory = join(directory, "build output");
+    try {
+      await t.step(
+        "init creates a usable starter and refuses overwrite",
+        async () => {
+          const result = await cli(["init", file, "--json"]);
+          assertEquals(result.code, 0, result.stderr);
+          const envelope = JSON.parse(result.stdout);
+          assertEquals(envelope.ok, true);
+          assertEquals(envelope.command, "init");
+          assertEquals(envelope.file, file);
+          const original = await Deno.readTextFile(file);
+          assertMatch(original, /export default/);
+          const repeated = await cli(["init", file, "--json"]);
+          assert(repeated.code !== 0);
+          assertEquals(JSON.parse(repeated.stdout).ok, false);
+          assertEquals(await Deno.readTextFile(file), original);
+        },
+      );
 
-    await t.step(
-      "build writes GLB, PNG and a machine-readable report",
-      async () => {
-        const result = await cli([
-          "build",
-          file,
-          outputDirectory,
-          "--software",
-          "--json",
-          "--width",
-          "320",
-          "--height",
-          "240",
-        ]);
+      await t.step(
+        "build writes GLB, PNG and a machine-readable report",
+        async () => {
+          const result = await cli([
+            "build",
+            file,
+            outputDirectory,
+            "--software",
+            "--json",
+            "--width",
+            "320",
+            "--height",
+            "240",
+          ]);
+          assertEquals(result.code, 0, result.stderr);
+          // Parsing the entire stdout also catches accidental diagnostic logging.
+          const envelope = JSON.parse(result.stdout);
+          assertEquals(envelope.ok, true);
+          assertEquals(envelope.command, "build");
+          assertEquals(envelope.file, file);
+          assertEquals(envelope.outputs, {
+            glb: join(outputDirectory, "model.glb"),
+            preview: join(outputDirectory, "preview.png"),
+            report: join(outputDirectory, "report.json"),
+          });
+          assert(
+            envelope.inspection && typeof envelope.inspection === "object",
+          );
+          const glb = await Deno.readFile(envelope.outputs.glb);
+          assertEquals(decoder.decode(glb.subarray(0, 4)), "glTF");
+          const header = new DataView(
+            glb.buffer,
+            glb.byteOffset,
+            glb.byteLength,
+          );
+          assertEquals(header.getUint32(4, true), 2);
+          assertEquals(header.getUint32(8, true), glb.byteLength);
+          const png = await Deno.readFile(envelope.outputs.preview);
+          assertEquals(Array.from(png.subarray(0, 8)), [
+            137,
+            80,
+            78,
+            71,
+            13,
+            10,
+            26,
+            10,
+          ]);
+          const dimensions = new DataView(
+            png.buffer,
+            png.byteOffset,
+            png.byteLength,
+          );
+          assertEquals(dimensions.getUint32(16), 320);
+          assertEquals(dimensions.getUint32(20), 240);
+          const report = JSON.parse(
+            await Deno.readTextFile(envelope.outputs.report),
+          );
+          assertEquals(report, envelope);
+        },
+      );
+
+      await t.step("inspect returns a single JSON result", async () => {
+        const result = await cli(["inspect", file, "--software", "--json"]);
         assertEquals(result.code, 0, result.stderr);
-        // Parsing the entire stdout also catches accidental diagnostic logging.
         const envelope = JSON.parse(result.stdout);
         assertEquals(envelope.ok, true);
-        assertEquals(envelope.command, "build");
+        assertEquals(envelope.command, "inspect");
         assertEquals(envelope.file, file);
-        assertEquals(envelope.outputs, {
-          glb: join(outputDirectory, "model.glb"),
-          preview: join(outputDirectory, "preview.png"),
-          report: join(outputDirectory, "report.json"),
-        });
         assert(envelope.inspection && typeof envelope.inspection === "object");
-        const glb = await Deno.readFile(envelope.outputs.glb);
-        assertEquals(decoder.decode(glb.subarray(0, 4)), "glTF");
-        const header = new DataView(glb.buffer, glb.byteOffset, glb.byteLength);
-        assertEquals(header.getUint32(4, true), 2);
-        assertEquals(header.getUint32(8, true), glb.byteLength);
-        const png = await Deno.readFile(envelope.outputs.preview);
-        assertEquals(Array.from(png.subarray(0, 8)), [
-          137,
-          80,
-          78,
-          71,
-          13,
-          10,
-          26,
-          10,
-        ]);
-        const dimensions = new DataView(
-          png.buffer,
-          png.byteOffset,
-          png.byteLength,
-        );
-        assertEquals(dimensions.getUint32(16), 320);
-        assertEquals(dimensions.getUint32(20), 240);
-        const report = JSON.parse(
-          await Deno.readTextFile(envelope.outputs.report),
-        );
-        assertEquals(report, envelope);
-      },
-    );
-
-    await t.step("inspect returns a single JSON result", async () => {
-      const result = await cli(["inspect", file, "--software", "--json"]);
-      assertEquals(result.code, 0, result.stderr);
-      const envelope = JSON.parse(result.stdout);
-      assertEquals(envelope.ok, true);
-      assertEquals(envelope.command, "inspect");
-      assertEquals(envelope.file, file);
-      assert(envelope.inspection && typeof envelope.inspection === "object");
-    });
-  } finally {
-    await Deno.remove(directory, { recursive: true });
-  }
+      });
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  },
 });
 
 Deno.test("CLI validates arguments before launching and emits JSON errors", async () => {
@@ -363,66 +459,70 @@ Deno.test("CLI subcommands support help without a model file", async () => {
   }
 });
 
-Deno.test("CLI model failures emit one JSON error and exit cleanly", async (t) => {
-  const directory = await Deno.makeTempDir({ prefix: "model cli failures " });
-  const file = join(directory, "model.ts");
-  try {
-    for (
-      const failure of [
-        {
-          name: "runtime exception",
-          source:
-            'export default () => { throw new Error("intentional CLI failure"); };',
-          error: /intentional CLI failure/,
-        },
-        {
-          name: "malformed TypeScript",
-          source: "export default function (",
-          error: /build failed|expected|unexpected/i,
-        },
-      ]
-    ) {
-      await t.step(failure.name, async () => {
-        await Deno.writeTextFile(file, failure.source);
-        const result = await cli([
-          "inspect",
-          file,
-          "--software",
-          "--json",
-          "--timeout",
-          "10000",
-        ], 15_000);
-        assert(result.code !== 0);
-        const envelope = JSON.parse(result.stdout);
-        assertEquals(envelope.ok, false);
-        assertMatch(envelope.error, failure.error);
-      });
-    }
+Deno.test({
+  name: "CLI model failures emit one JSON error and exit cleanly",
+  ignore: !chromiumAvailable,
+  async fn(t) {
+    const directory = await Deno.makeTempDir({ prefix: "model cli failures " });
+    const file = join(directory, "model.ts");
+    try {
+      for (
+        const failure of [
+          {
+            name: "runtime exception",
+            source:
+              'export default () => { throw new Error("intentional CLI failure"); };',
+            error: /intentional CLI failure/,
+          },
+          {
+            name: "malformed TypeScript",
+            source: "export default function (",
+            error: /build failed|expected|unexpected/i,
+          },
+        ]
+      ) {
+        await t.step(failure.name, async () => {
+          await Deno.writeTextFile(file, failure.source);
+          const result = await cli([
+            "inspect",
+            file,
+            "--software",
+            "--json",
+            "--timeout",
+            "10000",
+          ], 15_000);
+          assert(result.code !== 0);
+          const envelope = JSON.parse(result.stdout);
+          assertEquals(envelope.ok, false);
+          assertMatch(envelope.error, failure.error);
+        });
+      }
 
-    await t.step(
-      "an unresolved factory times out and releases the process",
-      async () => {
-        await Deno.writeTextFile(
-          file,
-          "export default async () => await new Promise(() => {});",
-        );
-        const result = await cli([
-          "inspect",
-          file,
-          "--software",
-          "--json",
-          "--timeout",
-          "2000",
-        ], 10_000);
-        assert(result.code !== 0);
-        // Parsing all stdout catches duplicate reports from cancelled work.
-        const envelope = JSON.parse(result.stdout);
-        assertEquals(envelope.ok, false);
-        assertMatch(envelope.error, /timeout|timed out/i);
-        assertMatch(envelope.error, /2000/);
-      },
-    );
-  } finally {
-    await Deno.remove(directory, { recursive: true });
-  }
+      await t.step(
+        "an unresolved factory times out and releases the process",
+        async () => {
+          await Deno.writeTextFile(
+            file,
+            "export default async () => await new Promise(() => {});",
+          );
+          const result = await cli([
+            "inspect",
+            file,
+            "--software",
+            "--json",
+            "--timeout",
+            "2000",
+          ], 10_000);
+          assert(result.code !== 0);
+          // Parsing all stdout catches duplicate reports from cancelled work.
+          const envelope = JSON.parse(result.stdout);
+          assertEquals(envelope.ok, false);
+          assertMatch(envelope.error, /timeout|timed out/i);
+          assertMatch(envelope.error, /2000/);
+        },
+      );
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  },
 });

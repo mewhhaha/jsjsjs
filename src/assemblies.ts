@@ -1,12 +1,13 @@
 /** Editable repeated assemblies; X is width, Y is up, and Z is depth. */
+import * as THREE from "three";
 import {
   box,
   extrude,
   group,
   type GroupOptions,
   material as makeMaterial,
-  THREE,
-} from "./prelude.ts";
+} from "./primitives.ts";
+import { integer, positive } from "./validate.ts";
 
 export interface AssemblyOptions extends GroupOptions {
   material?: THREE.Material | THREE.Material[];
@@ -75,18 +76,6 @@ export interface ShelvingOptions extends AssemblyOptions {
   supportWidth?: number;
   shelfMaterial?: THREE.Material | THREE.Material[];
 }
-function positive(n: number, label: string) {
-  if (!Number.isFinite(n) || n <= 0) {
-    throw new RangeError(`${label} must be finite and positive`);
-  }
-  return n;
-}
-function count(n: number, label: string, min = 1) {
-  if (!Number.isSafeInteger(n) || n < min) {
-    throw new RangeError(`${label} must be a safe integer >= ${min}`);
-  }
-  return n;
-}
 function fits(condition: boolean, message: string) {
   if (!condition) throw new RangeError(message);
 }
@@ -104,15 +93,16 @@ function distributed(
     amount === undefined || spacing === undefined,
     `${label} count and spacing are mutually exclusive`,
   );
-  const n = count(
+  const n = integer(
     amount ?? (spacing === undefined ? fallback : Math.max(
       min,
       Math.ceil(
         (length - positive(spacing, `${label} spacing`)) / (size + spacing),
       ),
     )),
-    `${label} count`,
     min,
+    Infinity,
+    `${label} count`,
   );
   fits(n * size < length, `${label} must leave positive clear gaps`);
   const gap = (length - n * size) / (n + 1);
@@ -172,14 +162,15 @@ export function railing(options: RailingOptions = {}): THREE.Group {
     options.postCount === undefined || options.postSpacing === undefined,
     "postCount and postSpacing are mutually exclusive",
   );
-  const n = count(
+  const n = integer(
     options.postCount ??
       Math.ceil(
           (width - postWidth) /
             positive(options.postSpacing ?? 1, "postSpacing"),
         ) + 1,
-    "postCount",
     2,
+    Infinity,
+    "postCount",
   );
   const step = (width - postWidth) / (n - 1);
   fits(step > postWidth, "posts must leave positive gaps");
@@ -330,7 +321,8 @@ export function louvers(options: LouversOptions = {}): THREE.Group {
   const border = positive(options.frameWidth ?? 0.1, "frameWidth"),
     thickness = positive(options.slatThickness ?? 0.04, "slatThickness"),
     slatDepth = positive(options.slatDepth ?? depth, "slatDepth");
-  const n = count(options.count ?? 6, "count"), angle = options.angle ?? 45;
+  const n = integer(options.count ?? 6, 1, Infinity, "count"),
+    angle = options.angle ?? 45;
   fits(
     Number.isFinite(angle) && Math.abs(angle) <= 90,
     "angle must be finite and between -90 and 90 degrees",
@@ -377,7 +369,7 @@ export function shelving(options: ShelvingOptions = {}): THREE.Group {
     depth = positive(options.depth ?? 0.5, "depth");
   const thickness = positive(options.thickness ?? 0.05, "thickness"),
     supportWidth = positive(options.supportWidth ?? 0.06, "supportWidth"),
-    n = count(options.count ?? 5, "count");
+    n = integer(options.count ?? 5, 1, Infinity, "count");
   const support = options.support ?? "posts";
   fits(
     support === "posts" || support === "sides",

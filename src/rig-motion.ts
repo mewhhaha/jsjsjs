@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import type { XYZ } from "./prelude.ts";
-import { checkedVector, resolveTarget } from "./rigging.ts";
+import type { XYZ } from "./primitives.ts";
+import { checkedVector, resolveTarget } from "./internal.ts";
 
 function bone(root: THREE.Object3D, name: string): THREE.Bone {
   const object = resolveTarget(root, name);

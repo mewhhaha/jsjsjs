@@ -227,15 +227,24 @@ for no bolt holes. Bolt holes must lie entirely within the plate and must not
 touch each other or either annular boundary. Bracket thickness must be smaller
 than both leg dimensions.
 
-## Gallery
+## Previewing a helper
 
-[The shape gallery](../examples/shapes.ts) lays out every new shape helper in
-named display tiles, including both basin variants. Each tile scales its model
-uniformly to fit, so displayed size does not indicate the helper's default size.
+To see a helper's defaults, return it from a model file and build it. For
+example, save this as `output/railing.ts`:
+
+```ts
+import { railing } from "js3";
+
+export default () => railing({ width: 4, postSpacing: 1 });
+```
 
 ```sh
-js3 build examples/shapes.ts output/shapes --json
+js3 build output/railing.ts output/railing --json
+js3 screenshot output/railing.ts output/railing-front.png --view front
 ```
+
+The report's `inspection.bounds` gives the exact dimensions, and
+`inspection.objects` lists every part by name, such as `post_0` and `rail_top`.
 
 ## Hollow containers
 

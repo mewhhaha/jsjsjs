@@ -1,19 +1,15 @@
 import { assert, assertEquals } from "@std/assert";
-import * as esbuild from "esbuild";
-import { launchViewer, waitForModel } from "../src/browser.ts";
-import { startServer } from "../src/server.ts";
 import type { ModelView } from "../web/api.ts";
+import { chromiumAvailable, withViewer } from "./support.ts";
 
 Deno.test({
   name:
     "headless inspection reports authored geometry and renders all standard views",
+  ignore: !chromiumAvailable,
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
-    const directory = await Deno.makeTempDir({ prefix: "model-inspection-" });
-    const file = `${directory}/model.ts`;
-    await Deno.writeTextFile(
-      file,
+    await withViewer(
       `import * as THREE from "three";
 export default function buildModel() {
   const group = new THREE.Group();
@@ -31,72 +27,60 @@ export default function buildModel() {
   group.add(box, copies);
   return group;
 }`,
+      async ({ page }) => {
+        const inspection = await page.evaluate(() =>
+          window.modelViewer.inspect()
+        );
+        assertEquals(inspection.bounds, {
+          min: [-7, -2, -3],
+          max: [4, 2, 3],
+          size: [11, 4, 6],
+          center: [-1.5, 0, 0],
+        });
+        assertEquals(inspection.counts, {
+          objects: 3,
+          meshes: 2,
+          instances: 3,
+          geometries: 1,
+          materials: 1,
+          vertices: 72,
+          triangles: 36,
+        });
+        assertEquals(inspection.objects.map((object) => object.name), [
+          "assembly",
+          "box",
+          "copies",
+        ]);
+        assertEquals(inspection.materials, [{
+          name: "paint",
+          type: "MeshStandardMaterial",
+          color: "#123456",
+          opacity: 1,
+          transparent: false,
+        }]);
+        assert(
+          inspection.warnings.some((warning) => warning.includes("Instanced")),
+        );
+        const views: ModelView[] = [
+          "iso",
+          "front",
+          "back",
+          "left",
+          "right",
+          "top",
+          "bottom",
+        ];
+        const images = new Set<string>();
+        for (const view of views) {
+          await page.evaluate((view) => window.modelViewer.setView(view), view);
+          const png = await page.locator("canvas").screenshot();
+          assert(png.length > 1000, `${view} rendered no useful image`);
+          images.add(Array.from(png).join(","));
+        }
+        assert(images.size >= 4, "Changing views should change the image");
+        assertEquals(await page.evaluate(() => window.modelViewer.error), null);
+      },
+      { width: 320, height: 240 },
     );
-    const server = await startServer(file, 0);
-    const { browser, page } = await launchViewer(server.url, {
-      headless: true,
-      renderer: "software",
-      width: 320,
-      height: 240,
-    });
-    try {
-      await waitForModel(page);
-      const inspection = await page.evaluate(() =>
-        window.modelViewer.inspect()
-      );
-      assertEquals(inspection.bounds, {
-        min: [-7, -2, -3],
-        max: [4, 2, 3],
-        size: [11, 4, 6],
-        center: [-1.5, 0, 0],
-      });
-      assertEquals(inspection.counts, {
-        objects: 3,
-        meshes: 2,
-        instances: 3,
-        geometries: 1,
-        materials: 1,
-        vertices: 72,
-        triangles: 36,
-      });
-      assertEquals(inspection.objects.map((object) => object.name), [
-        "assembly",
-        "box",
-        "copies",
-      ]);
-      assertEquals(inspection.materials, [{
-        name: "paint",
-        type: "MeshStandardMaterial",
-        color: "#123456",
-        opacity: 1,
-        transparent: false,
-      }]);
-      assert(
-        inspection.warnings.some((warning) => warning.includes("Instanced")),
-      );
-      const views: ModelView[] = [
-        "iso",
-        "front",
-        "back",
-        "left",
-        "right",
-        "top",
-        "bottom",
-      ];
-      const images = new Set<string>();
-      for (const view of views) {
-        await page.evaluate((view) => window.modelViewer.setView(view), view);
-        const png = await page.locator("canvas").screenshot();
-        assert(png.length > 1000, `${view} rendered no useful image`);
-        images.add(Array.from(png).join(","));
-      }
-      assert(images.size >= 4, "Changing views should change the image");
-      assertEquals(await page.evaluate(() => window.modelViewer.error), null);
-    } finally {
-      await browser.close();
-      await server.close();
-      esbuild.stop();
-      await Deno.remove(directory, { recursive: true });
-    }
   },
 });

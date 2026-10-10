@@ -7,7 +7,8 @@ import {
   type MeshOptions,
   transform,
   type XYZ,
-} from "./prelude.ts";
+} from "./primitives.ts";
+import { integer, positive, vector } from "./validate.ts";
 
 export type Profile = THREE.Shape | readonly (readonly [number, number])[];
 export type SweepPath = THREE.Curve<THREE.Vector3> | readonly XYZ[];
@@ -89,26 +90,6 @@ export interface GussetOptions extends MeshOptions {
   height?: number;
   depth?: number;
 }
-function positive(v: number, label: string, zero = false): number {
-  if (!Number.isFinite(v) || (zero ? v < 0 : v <= 0)) {
-    throw new RangeError(
-      `${label} must be finite and ${zero ? "nonnegative" : "positive"}`,
-    );
-  }
-  return v;
-}
-function count(v: number, label: string, minimum = 1): number {
-  if (!Number.isInteger(v) || v < minimum) {
-    throw new RangeError(`${label} must be an integer >= ${minimum}`);
-  }
-  return v;
-}
-function vec(v: XYZ): THREE.Vector3 {
-  if (v.length !== 3 || !v.every(Number.isFinite)) {
-    throw new RangeError("path points must have three finite components");
-  }
-  return new THREE.Vector3(...v);
-}
 function mesh(
   geometry: THREE.BufferGeometry,
   options: MeshOptions,
@@ -128,7 +109,7 @@ function pathCurve(path: SweepPath): THREE.Curve<THREE.Vector3> {
     return path;
   }
   if (path.length < 2) throw new RangeError("path needs at least two points");
-  const points = path.map(vec);
+  const points = path.map((p) => vector(p, "path point"));
   for (let i = 1; i < points.length; i++) {
     if (points[i].distanceToSquared(points[i - 1]) === 0) {
       throw new RangeError("consecutive path points must differ");
@@ -204,8 +185,13 @@ export function sweepProfile(
   return mesh(
     new THREE.ExtrudeGeometry(shape, {
       extrudePath: pathCurve(path),
-      steps: count(options.steps ?? 64, "steps"),
-      curveSegments: count(options.curveSegments ?? 24, "curveSegments"),
+      steps: integer(options.steps ?? 64, 1, Infinity, "steps"),
+      curveSegments: integer(
+        options.curveSegments ?? 24,
+        1,
+        Infinity,
+        "curveSegments",
+      ),
       bevelEnabled: false,
     }),
     options,
@@ -224,7 +210,7 @@ export function pipe(options: PipeOptions = {}): THREE.Mesh {
   const shape = ring(
     options.radius ?? 0.15,
     options.wallThickness ?? 0.025,
-    count(options.radialSegments ?? 32, "radialSegments", 3),
+    integer(options.radialSegments ?? 32, 3, Infinity, "radialSegments"),
   );
   const geometry = new THREE.ExtrudeGeometry(shape, {
     depth: positive(options.length ?? 1, "length"),
@@ -240,7 +226,7 @@ export function hose(path: SweepPath, options: HoseOptions = {}): THREE.Mesh {
     ring(
       options.radius ?? 0.1,
       options.wallThickness ?? 0.02,
-      count(options.radialSegments ?? 24, "radialSegments", 3),
+      integer(options.radialSegments ?? 24, 3, Infinity, "radialSegments"),
     ),
     path,
     options,
@@ -276,7 +262,7 @@ export function handrail(
     new THREE.Shape(
       circle(
         positive(options.radius ?? 0.04, "radius"),
-        count(options.radialSegments ?? 20, "radialSegments", 3),
+        integer(options.radialSegments ?? 20, 3, Infinity, "radialSegments"),
       ),
     ),
     path,
@@ -359,8 +345,8 @@ export function doorframe(options: FrameOptions = {}): THREE.Group {
 /** Window surround with optional evenly spaced vertical/horizontal dividers. */
 export function windowFrame(options: WindowFrameOptions = {}): THREE.Group {
   const { w, h, t, d } = frameDimensions(options);
-  const n = count(options.mullions ?? 0, "mullions", 0),
-    m = count(options.transoms ?? 0, "transoms", 0);
+  const n = integer(options.mullions ?? 0, 0, Infinity, "mullions"),
+    m = integer(options.transoms ?? 0, 0, Infinity, "transoms");
   if (n * t >= w || m * t >= h) {
     throw new RangeError("dividers must leave positive openings");
   }
@@ -427,8 +413,8 @@ export function beamBetween(
   end: XYZ,
   options: BeamBetweenOptions = {},
 ): THREE.Mesh {
-  const a = vec(start),
-    b = vec(end),
+  const a = vector(start, "start"),
+    b = vector(end, "end"),
     delta = b.clone().sub(a),
     length = positive(delta.length(), "endpoint distance");
   const geometry = options.radius === undefined
@@ -441,7 +427,7 @@ export function beamBetween(
       positive(options.radius, "radius"),
       options.radius,
       length,
-      count(options.radialSegments ?? 24, "radialSegments", 3),
+      integer(options.radialSegments ?? 24, 3, Infinity, "radialSegments"),
     );
   geometry.applyQuaternion(
     new THREE.Quaternion().setFromUnitVectors(
@@ -473,8 +459,8 @@ export function flange(options: FlangeOptions = {}): THREE.Mesh {
   const r = positive(options.radius ?? 0.3, "radius"),
     inner = positive(options.innerRadius ?? 0.12, "innerRadius", true),
     thickness = positive(options.thickness ?? 0.04, "thickness"),
-    n = count(options.boltCount ?? 4, "boltCount", 0),
-    s = count(options.radialSegments ?? 48, "radialSegments", 3);
+    n = integer(options.boltCount ?? 4, 0, Infinity, "boltCount"),
+    s = integer(options.radialSegments ?? 48, 3, Infinity, "radialSegments");
   if (inner >= r) {
     throw new RangeError("innerRadius must be smaller than radius");
   }

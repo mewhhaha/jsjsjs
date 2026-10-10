@@ -1,3 +1,5 @@
+import type { Vector3Tuple } from "three";
+
 export type ModelView =
   | "iso"
   | "front"
@@ -6,8 +8,6 @@ export type ModelView =
   | "right"
   | "top"
   | "bottom";
-
-export type Vector3Tuple = [number, number, number];
 
 /** Authored model only. Bounds are world-space; mesh totals include instances. */
 export interface ModelInspection {
@@ -51,18 +51,12 @@ export interface ViewerAPI {
   revision: number;
   error: string | null;
   exportOBJ(): string;
-  /** Convenience export for smaller models; the CLI uses bounded chunks. */
+  /** Base64 GLB for smaller models; the CLI receives files with uploads. */
   exportGLB(): Promise<string>;
-  beginGLBExport(): Promise<GLBExportTransfer>;
-  readGLBExportChunk(id: string, index: number): string;
-  endGLBExport(id: string): void;
-  beginGroomExport(): GroomExportTransfer;
-  prepareGroomExportFile(
-    id: string,
-    fileIndex: number,
-  ): Promise<GroomFileExportTransfer>;
-  readGroomExportChunk(id: string, fileIndex: number, index: number): string;
-  endGroomExport(id: string): void;
+  /** POST the GLB to a CLI receiver URL as `model.glb`. */
+  uploadGLB(url: string): Promise<void>;
+  /** POST each groom asset file to a CLI receiver URL; paths are relative. */
+  uploadGrooms(url: string): Promise<GroomExportGroup[]>;
   inspect(): ModelInspection;
   setView(view: ModelView): void;
   fit(): void;
@@ -81,14 +75,6 @@ export interface ViewerAPI {
   ): Promise<{ png: string; manifest: ImposterManifest }>;
 }
 
-/** A pinned binary export transferred in independently encoded base64 chunks. */
-export interface GLBExportTransfer {
-  id: string;
-  byteLength: number;
-  chunkSize: number;
-  chunks: number;
-}
-
 export interface GroomExportGroup {
   name: string;
   directory: string;
@@ -101,17 +87,6 @@ export interface GroomExportGroup {
     depth: string;
     attributes: string;
   };
-}
-
-export interface GroomExportTransfer {
-  id: string;
-  grooms: GroomExportGroup[];
-  files: { path: string; kind: "json" | "png" }[];
-}
-
-/** Only the selected groom file is encoded and pinned at any one time. */
-export interface GroomFileExportTransfer extends GLBExportTransfer {
-  fileIndex: number;
 }
 
 declare global {

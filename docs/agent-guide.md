@@ -1,8 +1,18 @@
 # js3 guide: setup, modeling, and delivery
 
-For skeletons, skin weights, clips, exact-time captures, humanoid presets, IK,
-and spring hair chains, see [Rigging and animation](rigging.md). It is also
-included in `js3 guide`. Start with `js3 open examples/rigging.ts`.
+`js3 --help` lists every command and option. `js3 guide` prints that list, then
+this guide, then the references below. This guide covers setup, the build and
+review loop, how commands report results, the authoring contract, the modeling
+prelude, previews, and exports.
+
+- [Shape reference](new-shapes.md): containers, vessels, profiles, frames,
+  connectors, and repeated assemblies.
+- [Strands, cards, and sculpted locks](strands.md): procedural hair, fur, and
+  grass, authored hair cards, and stylized locks.
+- [Editable grooms](grooms.md): guide grooms, baked cards, detail levels, volume
+  shadows, and hair review.
+- [Rigging and animation](rigging.md): skeletons, skinning, clips, IK, spring
+  chains, and frame capture.
 
 ## Setup
 
@@ -32,10 +42,10 @@ including its source, configuration, and web assets. Re-run the install command
 if you move it.
 
 After installation, run `js3` from any directory. Relative model and output
-paths resolve from your current directory. You can also run commands from this
-checkout as `deno run -A main.ts <command> ...` without installing globally.
-Rediscover this guide with `js3 guide`, or get a short reference with
-`js3 --help`. `js3 guide --json` returns the guide in a JSON result.
+paths resolve from your current directory; absolute paths and models outside the
+checkout also work. Quote paths that contain spaces. You can also run commands
+from this checkout as `deno run -A main.ts <command> ...` without installing
+globally. `js3 guide --json` returns this guide as a JSON result.
 
 Chromium is needed for rendering, inspection, and export. To install the
 matching browser from any directory, run:
@@ -63,69 +73,134 @@ js3 screenshot chair.ts chair-front.png --view front --software --json
 js3 inspect chair.ts --software --json
 ```
 
-Read stdout as one JSON object and check the exit code. Diagnostics are on
-stderr. A successful build reports absolute `outputs.glb`, `outputs.preview`,
-and `outputs.report` paths. Open the preview with your image inspection tool;
-compare the silhouette, placement, and proportions to the request. Adjust the
-TypeScript and rebuild until the model is satisfactory. Deliver the GLB and
-preview, and retain the TypeScript for later edits.
+Read stdout as one JSON object and check the exit code. A successful build
+reports absolute `outputs.glb`, `outputs.preview`, and `outputs.report` paths.
+Open the preview with your image inspection tool, and compare the silhouette,
+placement, and proportions to the request. Adjust the TypeScript and rebuild
+until the model is satisfactory. Deliver the GLB and preview, and keep the
+TypeScript for later edits.
 
 Use batch commands for autonomous work. `open` and `--headed` intentionally
 create visible windows; use them only when the user wants a live viewer.
 
-## Command reference
+## How commands behave
 
-| Command                           | Result / default output                                                                |
-| --------------------------------- | -------------------------------------------------------------------------------------- |
-| `guide`                           | Print this setup and modeling guide; no model required.                                |
-| `types [directory]`               | Emit portable declarations and a typechecking config; default `.js3`.                  |
-| `init model.ts`                   | Create a starter source file; refuse to overwrite it.                                  |
-| `inspect model.ts`                | Validate the model and print its geometry report as JSON.                              |
-| `build model.ts [directory]`      | Write `model.glb`, `preview.png`, and `report.json`; default directory `output/model`. |
-| `screenshot model.ts [image.png]` | Render a PNG; default `output/model.png`.                                              |
-| `imposter model.ts [directory]`   | Bake `atlas.png` and `manifest.json`; default directory `output/imposter`.             |
-| `export model.ts [model.glb]`     | Export `.glb`, `.obj`, or `.blend`; default `output/model.glb`.                        |
-| `headless model.ts`               | Watch source files with a headless Chromium viewer.                                    |
-| `serve model.ts`                  | Watch and serve the viewer; print its URL without opening a browser.                   |
-| `open model.ts`                   | Watch with an intentionally visible Chromium viewer.                                   |
-| `help` or `--help` / `-h`         | Print the short command reference.                                                     |
+`js3 --help` is the reference for command syntax, defaults, and options. This
+section explains the behavior behind them.
 
-Batch commands (`inspect`, `build`, `screenshot`, `imposter`, `export`) exit
-after finishing. Live commands (`headless`, `serve`, `open`) run until Ctrl+C;
-their initial success message means the session started, not that the model
-passed inspection.
+### Results and exit codes
 
-In the live viewer, press `F` to refit, use WASD to move, Q/E to descend/ascend,
-and Shift for faster movement. Middle-drag orbits; Shift + middle-drag or
-right-drag pans; scrolling zooms. Closing a managed browser also ends its
-session.
+With `--json`, stdout carries exactly one JSON object. Build logs, renderer
+messages, and Blender output go to stderr. Any failure exits with code 1. With
+`--json`, it also prints `{ "ok": false, "error": "..." }` on stdout. The error
+message always goes to stderr.
 
-| Option                    | Behavior / default                                                                                                     |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `--force`                 | Replace an existing generated `types` bundle; refuses unrelated directories.                                           |
-| `--json`                  | One JSON result on stdout; diagnostics on stderr.                                                                      |
-| `--software`              | Use CPU rendering; useful on servers without a GPU.                                                                    |
-| `--gpu`                   | Require hardware rendering; mutually exclusive with `--software`.                                                      |
-| `--width N --height N`    | Browser viewport / preview size; default 1280 × 900, each 1–16384.                                                     |
-| `--view VIEW`             | Batch camera: `iso`, `front`, `back`, `left`, `right`, `top`, `bottom`; default authored camera or fitted perspective. |
-| `--timeout MS`            | Batch deadline in milliseconds; default 30000, or 120000 for `imposter`, positive integer.                             |
-| `--port N`                | Local server port; default 0 selects a free port, maximum 65535.                                                       |
-| `--headed` / `--headless` | Override browser mode; batch defaults to headless, `open` to headed.                                                   |
-| `--`                      | Treat remaining arguments as paths, including paths starting with `-`.                                                 |
+Successful results have `ok: true`, `command`, and absolute paths:
 
-Renderer selection defaults to automatic, with software fallback when hardware
-is unavailable. `headless --headed` and browser mode flags on `serve` are
-invalid. Preview, renderer, port, and timeout options concern commands that
-start a viewer or server; `init` only creates source and `types` only writes the
-declaration bundle. Builds replace existing artifacts and create output
-directories as needed.
+- Batch commands that render (`inspect`, `build`, `screenshot`, `export`,
+  `imposter`, `frames`) report the model `file`, `headless`, the selected
+  `renderer`, and an `inspection` object (see
+  [Review results](#review-results)). With `--clip`, they also report the
+  `animation` playback state.
+- `screenshot` and `export` add `output`. `build` adds `outputs.glb`,
+  `outputs.preview`, and `outputs.report`, plus `outputs.grooms` when the model
+  contains editable grooms. `imposter` adds `outputs.atlas`, `outputs.manifest`,
+  `coverage`, and `views`. `frames` adds `outputs.directory`,
+  `outputs.manifest`, and the `frames` count.
+- `init` reports the created `file`. `types` reports the bundle `directory` and
+  its `config`.
+- Live commands report the `url` and whether the browser is `headless` (`null`
+  for `serve`).
+
+`inspect` always prints JSON. Without `--json`, `init`, `screenshot`, and
+`export` print `Saved <path>`, and other commands print their result as indented
+JSON. `build` saves the same result object it prints as `report.json`.
+
+### Output files
+
+| Command      | Writes                                                                                          |
+| ------------ | ----------------------------------------------------------------------------------------------- |
+| `build`      | `model.glb`, `preview.png`, `report.json`, and a `grooms/` folder per [groom](grooms.md)        |
+| `screenshot` | One `.png` file; other extensions are rejected                                                  |
+| `export`     | `.glb`, `.obj`, or `.blend`, chosen by the output extension; other extensions are rejected      |
+| `imposter`   | `atlas.png` and `manifest.json` (see [imposter baking](#octahedral-imposter-baking))            |
+| `frames`     | `frame-00000.png`, `frame-00001.png`, ..., and `manifest.json` (see [rigging](rigging.md))      |
+| `init`       | The starter model; refuses to replace an existing file                                          |
+| `types`      | A declaration bundle and `tsconfig.json`; replaces only its own bundle, and only with `--force` |
+
+Output directories are created as needed. Each file is written to a temporary
+file and renamed into place once complete, replacing any earlier artifact. An
+output path that would overwrite the model source is rejected. A run that fails
+partway can leave a mix of new and earlier files in an output directory, so
+judge success by the exit code and `ok`, not by which files exist.
+
+### Batch and live sessions
+
+Batch commands (`inspect`, `build`, `screenshot`, `export`, `imposter`,
+`frames`) start an isolated local server on a free port, launch headless
+Chromium, build the model, wait for it to render, write their outputs, and shut
+everything down.
+
+Live commands (`headless`, `serve`, `open`) watch the model and its imported
+TS/JS files until Ctrl+C. Closing a managed browser window also ends the
+session. Their initial result means the session started, not that the model
+built. The server listens on 127.0.0.1 on a free port unless `--port` sets one,
+and prints its URL. `serve` launches no browser and needs no Playwright browser
+install.
+
+`open` is headed; every other command is headless. `--headed` and `--headless`
+override that. `headless --headed` is rejected, as are browser flags on `serve`.
+On Linux, headless Chromium uses its headless window platform and clears
+`DISPLAY` and `WAYLAND_DISPLAY`, so it never connects to your desktop, including
+during software fallback.
+
+### Timeouts
+
+For batch commands, `--timeout` is one deadline for the whole run: server
+startup, browser launch, the model build and first render, capture, and writing
+outputs, including `.blend` conversion. The default is 30000 ms, or 120000 ms
+for `imposter` and `frames`. When it expires, the command fails with
+`Operation timed out after N ms.` For `open` and `headless`, the value bounds
+browser launch and page load, plus the initial model build when `--clip` is
+given. The session itself has no deadline.
+
+### Renderers
+
+By default, Chromium tries hardware WebGL2 first. If no WebGL2 context is
+available, js3 relaunches it with SwiftShader software rendering and prints
+`GPU WebGL is unavailable; using software rendering.` The selected renderer is
+printed as `Renderer: ...` on stderr and reported as `renderer` in results.
+`--software` always uses SwiftShader, which needs no GPU and makes screenshots
+more reproducible. `--gpu` fails instead of falling back, including when
+Chromium selects a software renderer. In the live viewer, software rendering
+drops to half resolution while you drag and returns to full resolution when you
+stop.
+
+### Camera views
+
+Without `--view`, batch captures use the model's authored framing from
+`userData.preview` (see [preview settings](#preview-settings)), or a default
+three-quarter view. `--view` places a perspective camera on one side of the
+model: `front` +Z, `back` −Z, `left` −X, `right` +X, `top` +Y, `bottom` −Y, or
+`iso` (the default three-quarter direction). It looks at the center of the
+model's bounding sphere and fits the whole model. An explicit view ignores the
+authored `direction`, `target`, `radius`, and `padding`, but keeps the authored
+lighting, exposure, background, and grid. `--view` only affects batch commands;
+`init`, `open`, `headless`, and `serve` reject it. In a live viewer, press `F`
+to return to the authored framing. `imposter` chooses its own views and rejects
+`--view`.
+
+`--width` and `--height` set both the browser viewport and the captured image
+size. `imposter` rejects them and sizes its atlas with `--grid` and
+`--tile-size`.
 
 ## Authoring contract
 
-Export a default function returning a Three.js `Object3D` (usually a `Group`).
-Async functions are supported. Await every required texture or GLTF load before
-returning. Each call should return fresh objects. Use browser APIs; this code
-runs inside Chromium and has no `Deno` or Node filesystem access.
+Export a default function returning a Three.js `Object3D` (usually a `Group`)
+with finite geometry. Async functions are supported. Await every required
+texture or GLTF load before returning, so captures and exports wait for the
+complete model. Each call should return fresh objects, materials, and textures;
+the viewer disposes the previous model's GPU resources on rebuild.
 
 ```ts
 import { box, group, material, roundedBox, THREE } from "js3";
@@ -153,30 +228,59 @@ export default function buildModel(): THREE.Group {
 ```
 
 Keep dimensions and colors in easy-to-edit constants. Use consistent units,
-Y-up, and descriptive mesh/material names. Use groups to organize related parts.
-Primitives, `Shape`/`ExtrudeGeometry`, `LatheGeometry`, curves, and custom
-`BufferGeometry` support procedural modeling. Overlapping meshes are separate
-surfaces until combined with `await union([...])`. The prelude also provides
-subtraction, intersection, profile offsets, and profile bevels. Solid operations
-require closed, manifold static input meshes; arbitrary scenes and exports are
+Y-up, and descriptive mesh and material names. Use groups to organize related
+parts. Primitives, `Shape`/`ExtrudeGeometry`, `LatheGeometry`, curves, and
+custom `BufferGeometry` support procedural modeling. Overlapping meshes are
+separate surfaces until combined with `await union([...])`. The prelude also
+provides subtraction, intersection, profile offsets, and profile bevels. Solid
+operations require closed, manifold static input meshes; scenes and exports are
 not automatically fused or certified printable.
 
-Import the prelude as `js3` or `js3/prelude`, Three.js as `three`, addons as
-`three/addons/...`, and local helpers using relative `.ts`/`.js` paths. Place
-assets beside the model; load `texture.png` as `/assets/texture.png`. Await
-`TextureLoader.loadAsync` or `GLTFLoader.loadAsync`. Each batch run reads fresh
-assets. In a live session, save a source file after changing an asset to trigger
-a reload. Imported source files trigger rebuilds; assets alone do not. Camera
-position is preserved on hot reload, so refit or restart the viewer after
-changing dimensions or authored camera settings. Use a fresh batch build for the
-final preview.
+Model code runs inside Chromium, bundled by esbuild. Use browser APIs; there is
+no `Deno` or Node filesystem access. Import the prelude as `js3` or
+`js3/prelude`, Three.js as `three`, addons as `three/addons/...`, and local
+helpers using relative `.ts`/`.js` paths. The viewer and model share one
+Three.js instance. Other npm packages must be browser-compatible and resolvable
+by esbuild from the model's directory. Deno import-map aliases and `npm:`/`jsr:`
+specifiers are not supported in model code.
+
+Place assets beside the model and load them from `/assets/`: for example,
+`await new THREE.TextureLoader().loadAsync("/assets/wood.png")`. Only files
+inside the model's directory are served. Each batch run reads fresh assets. In a
+live session, imported source files trigger rebuilds but assets alone do not:
+save a source file after changing an asset. Camera position is preserved on hot
+reload, so press `F` after changing dimensions or authored camera settings. Use
+a fresh batch build for the final preview.
 
 ## Modeling prelude
 
 Import helpers from `js3` (or the equivalent `js3/prelude`). The exported
 `THREE` namespace gives access to the complete Three.js API. The helpers create
-ordinary meshes, materials, and groups; they do not introduce a separate scene
-format. Use descriptive names so the inspection report identifies each part.
+ordinary meshes, materials, groups, bones, and clips; they do not introduce a
+separate scene format. Use descriptive names so the inspection report identifies
+each part. `js3 types` includes every helper with inline documentation.
+
+| Helpers                                                                           | Purpose                                                       | Reference                                                           |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `material`, `box`, `roundedBox`, `sphere`, `cylinder`, `extrude`, `lathe`, `tube` | Named materials, primitives, extrusions, revolutions, tubes   | Table below                                                         |
+| `group`, `transform`, `center`, `ground`, `align`, `repeat`, `radial`, `mirror`   | Organize parts, place them by bounds, repeat and reflect them | Table below                                                         |
+| `stairs`, `ramp`, `arch`, `wall`, `column`, `gableRoof`                           | Architectural parts with real openings                        | [Architectural compositions](#architectural-compositions)           |
+| `basin`, `bowl`, `tray`, `cup`, `planter`, `tank`                                 | Hollow containers with real interiors                         | [Shape reference](new-shapes.md#hollow-containers)                  |
+| `vase`, `bottle`, `urn`, `pedestal`, `knob`                                       | Revolved vessels, bases, and fittings                         | [Shape reference](new-shapes.md#revolved-vessels-and-turned-solids) |
+| `dome`, `hemisphere`, `cone`, `funnel`, `canopy`                                  | Caps, curved shells, and open funnels                         | [Shape reference](new-shapes.md#caps-and-curved-shells)             |
+| `sweepProfile`, `molding`, `pipe`, `elbow`, `hose`, `gutter`, `handrail`          | Profiles and hollow or solid sections along paths             | [Shape reference](new-shapes.md#paths-and-profiles)                 |
+| `frame`, `doorframe`, `windowFrame`, `pictureFrame`, `recessedPanel`              | Openings, trim, and inset panels                              | [Shape reference](new-shapes.md#frames-and-recessed-faces)          |
+| `beamBetween`, `bracket`, `flange`, `gusset`                                      | Supports and connectors, including real flange holes          | [Shape reference](new-shapes.md#connectors-and-supports)            |
+| `railing`, `fence`, `grille`, `louvers`, `shelving`                               | Named repeated components with controlled spacing             | [Shape reference](new-shapes.md#repeated-assemblies)                |
+| `union`, `subtract`, `intersect`, `offsetProfile`, `bevel`                        | Solid booleans, profile offsets, beveled extrusions           | [Solid operations](#solid-operations-offsets-and-bevels)            |
+| `fur`, `grass`, `hair`, `sampleRoots`, `groom`, `strands`, `hairMaterial`         | Seeded strands emitted from a surface                         | [Strands](strands.md)                                               |
+| `hairCards`, `hairLock`                                                           | Authored textured hair cards and sculpted stylized locks      | [Strands](strands.md)                                               |
+| `createGroom`, `compileGroom`, `renderGroom`, `buildGroom`, `buildGroomLODs`      | Editable guides shared by strands, baked cards, and LODs      | [Grooms](grooms.md)                                                 |
+| `rig`, `boneChain`, `humanoidRig`, `bindSkin`, `attachToBone`                     | Named skeletons, weight binding, and bone attachments         | [Rigging](rigging.md)                                               |
+| `applyPose`, `resetPose`, `clip`, `sampleAnimation`, `AnimationPlayer`            | Rest-relative posing, clips, and deterministic playback       | [Rigging](rigging.md)                                               |
+| `solveTwoBoneIK`, `springChain`, `bakeAnimation`                                  | Limb IK and bakeable secondary motion                         | [Rigging](rigging.md)                                               |
+
+The basic helpers:
 
 | Helper                                                       | Use                                                                                                            |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
@@ -188,9 +292,6 @@ format. Use descriptive names so the inspection report identifies each part.
 | `extrude(shape, options)`                                    | Extrude an XY `Shape` along +Z; bevels are off by default.                                                     |
 | `lathe([[radius, y], ...], options)`                         | Revolve a profile around Y.                                                                                    |
 | `tube(pointsOrCurve, options)`                               | Create a tube along XYZ points or a Three.js curve.                                                            |
-| `stairs(options)`, `ramp(options)`                           | Create a flight of steps or a sloped wedge, climbing along +Z.                                                 |
-| `arch(options)`, `wall(options)`                             | Create an archway or a wall with an optional rectangular opening.                                              |
-| `column(options)`, `gableRoof(options)`                      | Create a column with base/capital or a roof with a ridge along Z.                                              |
 | `group(children, options)`                                   | Organize objects; options also accept `preview` settings.                                                      |
 | `transform(object, options)`                                 | Set name, position, rotation, or scale. Rotations use degrees.                                                 |
 | `center(object, axes = "xyz")`                               | Move selected world-space bounds centers to zero; use `"xz"` to leave height unchanged.                        |
@@ -278,47 +379,16 @@ export default function buildModel() {
 }
 ```
 
-See [`examples/architecture.ts`](../examples/architecture.ts) for a larger
-composition. These helpers are included in `js3 types`; after updating the CLI,
-refresh an existing bundle with `js3 types --force`.
-
 ### Containers, profiles, and assemblies
 
-All of these helpers are exported from `js3` and included in `js3 types`. Most
-take one optional options object with dimensions, `name`, `material`, and
-transforms; path/profile helpers have the positional arguments shown below.
-Angles use degrees. Invalid dimensions and impossible fits throw errors.
-
-| Family                       | Helpers and key options                                                                                                                                                                                            |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Hollow containers            | `basin({ shape: "round"                                                                                                                                                                                            |
-| Revolved forms               | `vase`, `bottle`, `urn`, `pedestal`, `knob`; use `lathe` for your own radius/height profile.                                                                                                                       |
-| Caps and shells              | `dome`, `hemisphere`, `cone`, `funnel`, `canopy`; openings and wall thickness depend on the helper.                                                                                                                |
-| Straight and curved sections | `pipe({ radius, wallThickness, length })`, `elbow({ radius, wallThickness, bendRadius, angle })`, `hose(path, options)`, `handrail(path, options)`, `gutter(options)`. A pipe/hose is hollow; a handrail is solid. |
-| Custom profiles along paths  | `sweepProfile(profile, path, options)`, `molding(profile, path, options)`; profile is a `THREE.Shape` with optional holes or XY point tuples; path is XYZ point tuples or a Three.js curve.                        |
-| Frames and panels            | `frame`, `doorframe`, `windowFrame`, `pictureFrame`, `recessedPanel`; frame sizing uses `openingWidth`, `openingHeight`, `thickness`, and `depth`. Window frames add `mullions`/`transoms`.                        |
-| Supports and fittings        | `beamBetween(startXYZ, endXYZ, { width, depth })`, or `{ radius }` for a round beam; `bracket`, `flange`, `gusset`. Flanges support a center opening and bolt holes.                                               |
-| Repeated assemblies          | `railing({ postCount, railCount })`, `fence({ slatCount, topProfile: "pointed" })`, `grille({ verticalCount, horizontalCount })`, `louvers({ count, angle })`, `shelving({ count, support: "posts"                 |
-
-Containers and repeated assemblies use a bottom-center origin, with Y up.
-`basin` defaults to round; `tray` defaults to a shallow rectangle. A basin's
-`height` excludes its optional rim height, and a rim extends outward. Set both
-`rimWidth` and `rimHeight` to enable one. `drainRadius` makes a real hole
-through the floor. Walls and floors are actual geometry, not backface rendering
-tricks.
-
-Railing post counts include both endpoints; `postSpacing` instead sets a maximum
-center-to-center distance. Fence `slatSpacing` and grille `verticalSpacing` /
-`horizontalSpacing` instead specify maximum clear gaps, including edge gaps. Do
-not supply both a count and its corresponding spacing. Louvers validate the
-rotated slats against the frame's height and depth; reduce `slatDepth` or
-`count` when they do not fit. Shelving offers separate shelf and support
-materials.
-
-Use [the detailed shape reference](new-shapes.md) for each helper's defaults,
-local axes, thickness rules, part names, and fit constraints. See
-[`examples/shapes.ts`](../examples/shapes.ts) for a gallery. Refresh
-declarations with `js3 types --force` after updating the CLI.
+Most of these helpers take one optional options object with dimensions, `name`,
+`material`, and transforms. `sweepProfile`, `molding`, `hose`, and `handrail`
+take a profile or path first, and `beamBetween` takes two XYZ endpoints. Angles
+use degrees. Invalid dimensions and impossible fits throw errors. Walls, floors,
+bores, drains, and bolt holes are real geometry, not backface rendering tricks.
+Containers and repeated assemblies stand on Y = 0 with a bottom-center origin.
+The [shape reference](new-shapes.md) lists each helper's defaults, local axes,
+thickness rules, part names, and fit constraints.
 
 ### Solid operations, offsets, and bevels
 
@@ -418,7 +488,7 @@ the files you want checked:
 ```
 
 Then run `deno run -A npm:typescript@5.9.3/tsc -p tsconfig.json`. `init` does
-not write this config automatically. `types` refuses an existing output
+not write this config or run `types`. `types` refuses an existing output
 directory unless `--force` is provided and the directory is recognized as a
 bundle owned by this command; it will not overwrite an unrelated directory.
 
@@ -428,15 +498,19 @@ bundle owned by this command; it will not overwrite an unrelated directory.
 arrays. `counts` includes objects, meshes, instances, unique geometries, unique
 materials, vertices, and triangles. Mesh totals include instances; per-object
 counts describe one copy of its geometry. Counts include full geometry even when
-a draw range renders only part of it. Bounds include hidden authored objects;
-viewer lights and grid are excluded. Inspect `warnings` for visibility,
-instancing, or other qualifications. These are descriptive checks, not a proof
-of correct topology or an exact count of what every exporter writes.
+a draw range renders only part of it. `objects` lists every object with its
+name, type, visibility, counts, and materials; `materials` lists each material's
+color and transparency; `animations` lists clip names, durations, and track
+counts. Bounds include hidden authored objects; viewer lights and grid are
+excluded. Inspect `warnings` for visibility, instancing, or other
+qualifications. These are descriptive checks, not a proof of correct topology or
+an exact count of what every exporter writes.
 
-`--view front` looks from +Z, `right` from +X, and `top` from +Y. All standard
-views fit the complete model. For an authored portrait or detail view, omit
-`--view` and set `model.userData.preview` with `direction`, `target`, `radius`,
-and `padding`; lighting, exposure, background, and grid are also configurable:
+### Preview settings
+
+Set `userData.preview` on the returned root object, or pass `preview` to
+`group()`, to control the default camera and the viewer's look. These settings
+affect previews and captures only, not exported materials.
 
 ```ts
 model.userData.preview = {
@@ -446,18 +520,24 @@ model.userData.preview = {
   padding: 1.2, // Default 1.2, minimum 1.
   background: "#202522",
   grid: false,
-  exposure: 1.4,
-  lighting: { hemisphere: 2.4, key: 3, fill: 2 },
+  exposure: 1.4, // Tone-mapping exposure; default 1.4.
+  lighting: { hemisphere: 2.4, key: 3, fill: 2, shadows: true },
 };
 ```
 
-Explicit `--view` ignores authored camera settings while retaining lighting and
-background. Camera positions are `front` +Z, `back` −Z, `left` −X, `right` +X,
-`top` +Y, and `bottom` −Y, looking toward the target.
+`target` and `radius` frame one part of a model, such as a face. `lighting` sets
+the hemisphere, key, and fill intensities; `shadows: true` enables model-fitted
+soft key/fill shadow maps (off by default). Groom volume shadow settings also
+live under `lighting`; see [grooms](grooms.md). To control one mesh, set
+`mesh.userData.previewShadows = { cast: true, receive: false }`. `--view`
+replaces the authored camera but keeps these lighting and background settings;
+see [Camera views](#camera-views).
 
-Prefer GLB for delivery. OBJ contains geometry and transforms but does not carry
-materials, textures, skinning, or animation; skinned and instanced geometry is
-not baked into its displayed pose. Export format follows the output extension:
+## Export formats
+
+Prefer GLB for delivery. It keeps meshes, hierarchy, and the materials,
+textures, skins, morph targets, and animations that Three.js's `GLTFExporter`
+supports. The viewer's default lights, grid, and camera are never exported.
 
 ```sh
 js3 export chair.ts chair.glb --json
@@ -465,79 +545,44 @@ js3 export chair.ts chair.obj --json
 js3 export chair.ts chair.blend --software --json
 ```
 
-`.blend` export additionally requires Blender on `PATH` (or set `JS3_BLENDER` to
-its executable). It imports a temporary GLB in a separate Blender process using
-`--background --factory-startup`, packs textures, and saves the file. It never
-connects to an existing Blender/MCP session or opens a Blender window. Supported
-meshes, materials, hierarchy, rigs, and animation remain editable; procedural
-instructions, modifier history, Geometry Nodes, constraints, and arbitrary
-shaders are not reconstructed. The entry TypeScript source is included as a text
-datablock for reference, but helper imports and assets are not a complete source
-archive. Keep the original project for edits. The viewer's default lights, grid,
-and camera are excluded. `build` continues to produce GLB/PNG/JSON without
-Blender; `.blend` is a separate export.
+OBJ contains the model's geometry and world transforms in your modeling units;
+the format has no unit metadata. Three.js's
+[OBJExporter](https://threejs.org/docs/pages/OBJExporter.html) writes no MTL
+materials or textures, and OBJ carries no rig or animation. Skinned, instanced,
+and shader-deformed geometry is not baked into its displayed pose, so use
+regular meshes for OBJ. Intersecting meshes stay separate surfaces unless you
+combine suitable closed static meshes with `await union([...])` first.
 
-Build or runtime errors return nonzero with `{ "ok": false, "error": "..." }`
-when `--json` is used. Fix the source and repeat. Increase `--timeout` for large
-assets (milliseconds; default 30000).
+`.blend` export requires Blender on `PATH`, or `JS3_BLENDER` set to its
+executable. The CLI exports a temporary GLB, imports it in a separate background
+Blender process (`--background --factory-startup --disable-autoexec`, with
+display variables cleared on Linux), packs textures, and saves a real `.blend`
+file. It never connects to an existing Blender or MCP session or opens a Blender
+window. Meshes, materials, hierarchy, rigs, and animation that survive glTF
+remain editable. Procedural modeling history, modifiers, Geometry Nodes,
+constraints, and arbitrary Three.js shaders are not reconstructed. Strand
+batches become native Blender Hair Curves; see [strands](strands.md). The entry
+TypeScript file is included as a text datablock for reference, but its imports
+and assets are not archived, so keep the original project for parametric edits.
+`build` never needs Blender; `.blend` is a separate export.
 
-## Hair, fur, grass, and fibers
+## Hair, fur, grass, and grooms
 
-The prelude includes `fur(surface, options)`, `grass(surface, options)`, and
-`hair(surface, { roots, groom, render })`. These distribute seeded roots over
-static triangle surfaces and create groomed, tapered strands. `roots` controls
-count, seed, density masks, and regions; `groom` controls guide interpolation,
-length, clump, curl, frizz, flyaways, and static ellipsoid clearance; `render`
-chooses batched tubes or crossed ribbons, colors, material, and transforms.
+Two references cover fibers, and `js3 guide` prints both:
 
-Use `sampleRoots`, `groom`, and `strands` separately to retain the same root
-positions while changing hairstyles or other strand shapes. Sampled mesh
-coordinates include world transforms; do not apply the emitter transform twice.
-For grass, use upward-facing emitter normals. Skinning and morphing must be
-baked before root sampling.
+- [Strands, cards, and sculpted locks](strands.md) covers the direct builders.
+  `fur`, `grass`, and `hair` emit seeded, groomed strands from a static surface,
+  and `sampleRoots`, `groom`, and `strands` expose the separate stages.
+  `hairCards` builds authored textured cards; `hairLock` sculpts closed,
+  stylized locks.
+- [Editable grooms](grooms.md) covers `createGroom`, `compileGroom`,
+  `renderGroom`, `buildGroom`, and `buildGroomLODs`. One JSON-safe guide source
+  feeds strands, baked cards, detail levels, and preview volume shadows. `build`
+  saves each groom's source and baked maps under `grooms/`. It also covers the
+  hair review script and Cycles reference renders.
 
-The [strand reference](strands.md), also appended by `js3 guide`, contains
-complete examples and controls. Try `examples/strand-fur.ts` and
-`examples/strand-garden.ts`. Both work with ordinary build, screenshot, export,
-and imposter commands. Counts increase density; segment counts improve strand
-curvature. Tube side counts and ribbon planes change geometry cost separately.
-
-GLB/OBJ exports use the preview meshes. `.blend` also reconstructs editable
-native Hair Curves and hidden guides. Tube previews are hidden in favor of
-native curves with a Principled Hair shader and Cycles; ribbon preview meshes
-stay visible, with their editable centerlines hidden. Native strand export
-requires Blender's `hair_curves.add_curves` API (verified with Blender 5.2).
-These are static grooms, not attached scalp systems or particle dynamics.
-
-For an editable source shared by strands, cards, and baked maps, use
-`createGroom()`, `compileGroom()`, and `renderGroom()`; `buildGroom()` combines
-those stages. Named layers control undercoat, guard hairs, and flyaways.
-`buildGroomLODs()` adds distance-based detail switching. `js3 build` exports
-each source as `groom.json` with its five baked PNG maps and a manifest. The
-[editable groom guide](grooms.md), also included by `js3 guide`, covers the
-dedicated hair shader, memory budgets, portable material fallback, and research
-limitations. `examples/groom-fur.ts` demonstrates a layered coat.
-
-### Human haircut examples
-
-`js3 open examples/haircuts.ts` previews a default human head and eight
-interchangeable wigs. Use `examples/haircut.ts` for a single head with hair, or
-`examples/wig.ts` for a detached wig; edit the `STYLE` constant to select buzz,
-crop, side-part, bob, waves, curls, ponytail, or braids. A `bald` reference is
-also available in the catalog. Each head and wig share the same fitting frame.
-`examples/hair-bun.ts` is a separate authored updo with an uneven fringe and
-loose temple strands, built through the editable groom pipeline.
-`examples/hair-bun-lod.ts` demonstrates its detail levels.
-
-The [haircut guide](haircuts.md) describes the reusable source helpers in
-`examples/haircuts/`, the shared fitting dimensions, and export commands. The
-styles use a licensed anatomical head, layered alpha hair cards and separate
-editable strands. `buildHaircut()` and `buildHead()` are asynchronous because
-they load the bundled head asset. `buildWig()` is synchronous.
-
-Use `hairCards(guides, options)` for portable, textured card grooms. Each guide
-specifies centerline `points`, full `width`, and optional facing `normals`. The
-[card guide](hair-cards.md), included below, covers atlas controls and exports.
+All of them return ordinary meshes that work with `build`, `screenshot`,
+`export`, and `imposter`.
 
 ## Octahedral imposter baking
 
@@ -550,26 +595,17 @@ js3 imposter rock.ts output/rock-imposter --coverage 360 --grid 9 --tile-size 25
 ```
 
 Both commands write transparent `atlas.png` and `manifest.json`; omitting the
-output directory uses `output/imposter`. Coverage `180` means the upper
-hemisphere: every azimuth, from the horizon to directly above. It suits objects
-whose underside is never visible. Coverage `360` includes both hemispheres and
-the bottom pole. It suits objects that can be viewed from below. Coverage does
-not restrict horizontal rotation to 180 degrees.
-
-| Imposter option       | Behavior / default                                                            |
-| --------------------- | ----------------------------------------------------------------------------- |
-| `--coverage 180\|360` | Upper hemisphere or full sphere; default 180.                                 |
-| `--grid N`            | Tiles per row and column; odd integer 3–33, default 9.                        |
-| `--tile-size N`       | Complete square tile size in pixels, including internal gutters; default 256. |
-| `--gutter N`          | Transparent inset in pixels on every tile edge; default 2.                    |
-| `--padding N`         | Extra framing space around the common model bounds; default 1.05.             |
-| `--timeout MS`        | Total batch deadline; default 120000 for this command.                        |
+output directory uses `output/imposter`. Coverage `180` (the default) means the
+upper hemisphere: every azimuth, from the horizon to directly above. It suits
+objects whose underside is never visible. Coverage `360` includes both
+hemispheres and the bottom pole. It suits objects that can be viewed from below.
+Coverage does not restrict horizontal rotation to 180 degrees.
 
 The square atlas has side length `grid * tile-size`, at most 8192 pixels. The
-odd grid samples exact poles and horizon directions. More tiles improve angular
-coverage; larger tiles improve each view's detail. For a faster first check, use
-`--grid 3 --tile-size 128`. `--view`, `--width`, and `--height` are incompatible
-with `imposter`; choose the atlas dimensions with its own options.
+tile size includes the transparent gutter on every tile edge. The odd grid
+samples exact poles and horizon directions. More tiles improve angular coverage;
+larger tiles improve each view's detail. For a faster first check, use
+`--grid 3 --tile-size 128`.
 
 Every view uses the same orthographic scale and the model bounds center as its
 pivot, so silhouettes do not change size just because the camera rotates. The
@@ -628,7 +664,7 @@ a particular engine.
   batch commands without `--headed`, or use `headless` for a persistent session.
 - **Editor cannot resolve `js3` or `three`:** run `js3 types` in the model
   project and extend its `tsconfig.json` as shown above. Refresh generated types
-  after updating the CLI.
+  with `js3 types --force` after updating the CLI.
 - **Model fails to build:** read stderr or the JSON `error`; fix syntax,
   imports, or the default export. Return an Object3D containing finite geometry
   and await required asset loads. Quote paths containing spaces.
@@ -636,4 +672,4 @@ a particular engine.
   rerun the batch command. Assets are confined to the model's directory.
 - **Timeout:** check for unresolved loading promises or missing assets before
   increasing `--timeout`. Use the exit code and `ok` field to establish success;
-  an unsuccessful build can leave artifacts from an earlier or partial build.
+  a failed build can leave artifacts from an earlier or partial build.

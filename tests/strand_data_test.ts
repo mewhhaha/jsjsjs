@@ -6,7 +6,11 @@ import {
   assertThrows,
 } from "@std/assert";
 import * as THREE from "three";
-import { groom, sampleRoots, type StrandRoot } from "../src/strand-data.ts";
+import {
+  groom,
+  sampleRoots,
+  type StrandRoot,
+} from "../src/hair/strand-data.ts";
 
 function triangles(): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();

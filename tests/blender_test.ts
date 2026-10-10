@@ -1,38 +1,12 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { join } from "node:path";
-import { exportBlend } from "../src/blender.ts";
+import { blenderCommand, exportBlend } from "../src/blender.ts";
+import { blenderAvailable } from "./support.ts";
 
-const executable = Deno.env.get("JS3_BLENDER") ||
-  Deno.env.get("THREEJS_BLENDER") || "blender";
-let available = true;
-try {
-  available = new Deno.Command(executable, {
-    args: ["--background", "--version"],
-    env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
-    stdout: "null",
-    stderr: "null",
-  }).outputSync().success;
-} catch {
-  available = false;
-}
-if (!available) {
-  console.error("Skipping Blender integration test: Blender is not installed.");
-}
+const available = blenderAvailable();
 
 async function blender(script: string, args: string[]) {
-  const result = await new Deno.Command(executable, {
-    args: [
-      "--background",
-      "--factory-startup",
-      "--disable-autoexec",
-      "--python-exit-code",
-      "1",
-      "--python",
-      script,
-      "--",
-      ...args,
-    ],
-    env: { DISPLAY: "", WAYLAND_DISPLAY: "" },
+  const result = await blenderCommand(script, args, {
     stdout: "piped",
     stderr: "piped",
   }).output();

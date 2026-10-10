@@ -1,8 +1,9 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import * as esbuild from "esbuild";
-import { parseArgs } from "../main.ts";
+import { parseArgs } from "../src/cli/args.ts";
 import { startServer } from "../src/server.ts";
 import { launchViewer, waitForModel } from "../src/browser.ts";
+import { chromiumAvailable } from "./support.ts";
 
 Deno.test("CLI accepts quoted paths and validates options", () => {
   const args = parseArgs([
@@ -26,6 +27,7 @@ Deno.test("CLI accepts quoted paths and validates options", () => {
 Deno.test({
   name:
     "real browser: external TS, dependent imports, OBJ, PNG, hot reload and error recovery",
+  ignore: !chromiumAvailable,
   sanitizeOps: false, // esbuild's shared service owns process pipes until stop().
   sanitizeResources: false,
   async fn(t) {
